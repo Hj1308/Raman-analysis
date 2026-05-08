@@ -96,4 +96,4 @@ raman_analyzer/
 
 ## Author
 
-Hoda Jaafari — PhD Researcher, Chemistry
+H.J — Researcher, Chemistry
