@@ -1,0 +1,30 @@
+════════════════════════════════════════════════════════════
+  RAMAN ANALYSIS REPORT
+  File   : graphene_test.txt
+  Laser  : 532.0 nm
+════════════════════════════════════════════════════════════
+
+  FITTED PEAKS
+  Peak         Center       FWHM       Height         Area       R²
+  -------- ---------- ---------- ------------ ------------ --------
+  D            1351.2       45.0        774.0      54710.5    0.980
+  G            1579.3       30.0       1960.8      92400.7    0.878
+  D'           1604.9       41.0        356.2      22935.1    0.911
+  2D           2700.8       50.0       3063.2     240583.4    0.979
+  D+G          2941.0       66.5      19863.4      12172.3    0.952
+
+  INTENSITY RATIOS
+  ID/IG   (height) : 0.3947
+  ID/IG   (area)   : 0.5921
+  I2D/IG  (height) : 1.5622
+  I2D/IG  (area)   : 2.6037
+  ID'/IG  (height) : 0.1817
+  ID/ID'  (height) : 2.1727
+
+  STRUCTURAL ANALYSIS
+  Defect inter-distance L_D : 19.11 nm
+  Disorder stage            : Stage 2 (amorphous-like)
+  Defect type               : Grain boundary / edge defects (ID/ID'=2.2, expected ~3.5)
+  Estimated layers          : Bilayer (1 ≤ I2D/IG ≤ 2)
+
+════════════════════════════════════════════════════════════
