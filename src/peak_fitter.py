@@ -2,42 +2,50 @@
 Peak fitting module using lmfit.
 Line shapes per Ferrari & Basko (2013):
   D, G, D' → Lorentzian
-  2D       → Lorentzian (monolayer) or multi-Lorentzian
+  2D       → Lorentzian (monolayer) or dual-Lorentzian (bilayer)
   D+G      → Pseudo-Voigt
+
+Fixes applied:
+  - Dispersion coefficients corrected: D~0.174, 2D~0.348 cm⁻¹/nm @ 532 nm
+  - G / D_prime window overlap removed (G: 1500–1600, D': 1610–1680)
+  - 2D peak: dual-Lorentzian attempted if single R² < 0.90
 """
 
 import numpy as np
 from lmfit.models import LorentzianModel, PseudoVoigtModel, ConstantModel
 from dataclasses import dataclass, field
-from typing import Optional
 
 
-# ── Peak search windows (cm⁻¹) ────────────────────
-# These shift with laser wavelength (dispersive peaks: D, 2D)
-# Dispersion: D ~ 53 cm⁻¹/eV, 2D ~ 106 cm⁻¹/eV
+# ── Peak search windows (cm⁻¹) at 532 nm ─────────────
+# G and D_prime are now non-overlapping.
 PEAK_WINDOWS_532 = {
-    "D":   (1270, 1450),
-    "G":   (1500, 1620),
-    "D_prime": (1600, 1680),
-    "2D":  (2580, 2780),
-    "DG":  (2850, 2960),
+    "D":       (1270, 1450),
+    "G":       (1500, 1600),   # FIX: was 1500–1620, overlapped D'
+    "D_prime": (1610, 1680),   # FIX: was 1600–1680
+    "2D":      (2580, 2780),
+    "DG":      (2850, 2960),
 }
+
+# Dispersion coefficients in cm⁻¹/nm (Ferrari & Basko 2013):
+#   D:  53 cm⁻¹/eV  → ~0.174 cm⁻¹/nm @ 532 nm  (FIX: was 0.3)
+#   2D: 106 cm⁻¹/eV → ~0.348 cm⁻¹/nm @ 532 nm  (FIX: was 0.6)
+_DISP_D_PER_NM  = 0.174
+_DISP_2D_PER_NM = 0.348
 
 
 def get_peak_windows(laser_nm: float) -> dict:
     """
-    Adjust peak search windows based on laser wavelength.
-    Reference wavelength: 532 nm
-    Dispersion coefficients (cm⁻¹/nm):
-      D:  ~0.3 cm⁻¹/nm, 2D: ~0.6 cm⁻¹/nm
+    Adjust peak search windows for laser wavelength.
+    Dispersive peaks: D and 2D only. G, D', D+G are non-dispersive.
+    Reference: Ferrari & Basko, Nature Nanotechnology 8, 235 (2013)
     """
     delta_nm = laser_nm - 532.0
     windows  = {}
     for peak, (lo, hi) in PEAK_WINDOWS_532.items():
         if peak == "D":
-            shift = 0.3 * delta_nm
+            shift = _DISP_D_PER_NM * delta_nm
         elif peak == "2D":
-            shift = 0.6 * delta_nm
+            shift = _DISP_2D_PER_NM * delta_nm
         else:
             shift = 0.0
         windows[peak] = (lo + shift, hi + shift)
@@ -46,15 +54,16 @@ def get_peak_windows(laser_nm: float) -> dict:
 
 @dataclass
 class PeakResult:
-    name:      str
-    center:    float          = np.nan   # cm⁻¹
-    amplitude: float          = np.nan   # peak height
-    fwhm:      float          = np.nan   # cm⁻¹
-    area:      float          = np.nan   # integrated area
-    r_squared: float          = np.nan
-    found:     bool           = False
-    model_x:   np.ndarray     = field(default_factory=lambda: np.array([]))
-    model_y:   np.ndarray     = field(default_factory=lambda: np.array([]))
+    name:        str
+    center:      float      = np.nan
+    amplitude:   float      = np.nan   # peak height (a.u.)
+    fwhm:        float      = np.nan   # cm⁻¹
+    area:        float      = np.nan   # integrated area
+    r_squared:   float      = np.nan
+    found:       bool       = False
+    model_x:     np.ndarray = field(default_factory=lambda: np.array([]))
+    model_y:     np.ndarray = field(default_factory=lambda: np.array([]))
+    is_split_2D: bool       = False    # True when dual-Lorentzian used
 
 
 def _r_squared(y_data: np.ndarray, y_fit: np.ndarray) -> float:
@@ -67,7 +76,13 @@ def fit_lorentzian(wavenumber: np.ndarray,
                    intensity:  np.ndarray,
                    window:     tuple,
                    peak_name:  str) -> PeakResult:
-    """Fit a single Lorentzian peak within a wavenumber window."""
+    """
+    Fit a single Lorentzian peak.
+    lmfit Lorentzian: f(x) = amplitude / (pi * sigma * (1 + ((x-center)/sigma)^2))
+      sigma = HWHM  →  FWHM = 2*sigma
+      peak height = amplitude / (pi * sigma)
+      integrated area = amplitude  (lmfit convention)
+    """
     lo, hi = window
     mask   = (wavenumber >= lo) & (wavenumber <= hi)
     xd, yd = wavenumber[mask], intensity[mask]
@@ -83,16 +98,18 @@ def fit_lorentzian(wavenumber: np.ndarray,
         params = model.make_params(
             center    = dict(value=center_guess, min=lo, max=hi),
             amplitude = dict(value=yd.max() * np.pi * sigma_guess, min=0),
-            sigma     = dict(value=sigma_guess, min=1.0, max=(hi-lo)/2),
+            sigma     = dict(value=sigma_guess, min=1.0, max=(hi - lo) / 2),
             c         = dict(value=0, min=0)
         )
         fit = model.fit(yd, params, x=xd)
         p   = fit.params
+        sigma_val = float(p["sigma"].value)
+        amp_val   = float(p["amplitude"].value)
 
         result.center    = float(p["center"].value)
-        result.fwhm      = float(2 * p["sigma"].value)   # FWHM = 2σ for Lorentzian
-        result.amplitude = float(p["amplitude"].value / (np.pi * p["sigma"].value))
-        result.area      = float(p["amplitude"].value)
+        result.fwhm      = 2.0 * sigma_val
+        result.amplitude = amp_val / (np.pi * sigma_val)   # peak height
+        result.area      = amp_val                          # integrated area
         result.r_squared = _r_squared(yd, fit.best_fit)
         result.found     = result.r_squared > 0.70
         result.model_x   = xd
@@ -102,11 +119,71 @@ def fit_lorentzian(wavenumber: np.ndarray,
     return result
 
 
+def fit_2D_peak(wavenumber: np.ndarray,
+                intensity:  np.ndarray,
+                window:     tuple) -> PeakResult:
+    """
+    Fit the 2D band.
+    Tries single Lorentzian first (monolayer/few-layer).
+    If R² < 0.90, attempts dual-Lorentzian (AB-stacked bilayer).
+    Reference: Ferrari et al. (2006) Phys. Rev. Lett. 97, 187401
+    """
+    single = fit_lorentzian(wavenumber, intensity, window, "2D")
+    if single.r_squared >= 0.90:
+        return single
+
+    lo, hi = window
+    mask   = (wavenumber >= lo) & (wavenumber <= hi)
+    xd, yd = wavenumber[mask], intensity[mask]
+    if len(xd) < 10:
+        return single
+
+    try:
+        m1     = LorentzianModel(prefix="p1_")
+        m2     = LorentzianModel(prefix="p2_")
+        model  = m1 + m2 + ConstantModel()
+        mid    = (lo + hi) / 2.0
+        sg     = (hi - lo) / 10.0
+        params = model.make_params(
+            p1_center    = dict(value=mid - 20, min=lo,  max=mid),
+            p1_amplitude = dict(value=yd.max() * np.pi * sg, min=0),
+            p1_sigma     = dict(value=sg, min=1.0, max=(hi - lo) / 3),
+            p2_center    = dict(value=mid + 20, min=mid, max=hi),
+            p2_amplitude = dict(value=yd.max() * np.pi * sg * 0.5, min=0),
+            p2_sigma     = dict(value=sg, min=1.0, max=(hi - lo) / 3),
+            c            = dict(value=0, min=0)
+        )
+        fit     = model.fit(yd, params, x=xd)
+        r2_dual = _r_squared(yd, fit.best_fit)
+
+        if r2_dual > single.r_squared:
+            p   = fit.params
+            a1  = float(p["p1_amplitude"].value)
+            a2  = float(p["p2_amplitude"].value)
+            dom = "p1_" if a1 >= a2 else "p2_"
+            s_d = float(p[f"{dom}sigma"].value)
+            return PeakResult(
+                name        = "2D",
+                center      = float(p[f"{dom}center"].value),
+                fwhm        = 2.0 * s_d,
+                amplitude   = float(p[f"{dom}amplitude"].value) / (np.pi * s_d),
+                area        = a1 + a2,
+                r_squared   = r2_dual,
+                found       = r2_dual > 0.70,
+                model_x     = xd,
+                model_y     = fit.best_fit,
+                is_split_2D = True,
+            )
+    except Exception:
+        pass
+    return single
+
+
 def fit_pseudo_voigt(wavenumber: np.ndarray,
                      intensity:  np.ndarray,
                      window:     tuple,
                      peak_name:  str) -> PeakResult:
-    """Fit a single Pseudo-Voigt peak (for D+G band)."""
+    """Fit a Pseudo-Voigt peak (D+G combination band)."""
     lo, hi = window
     mask   = (wavenumber >= lo) & (wavenumber <= hi)
     xd, yd = wavenumber[mask], intensity[mask]
@@ -117,19 +194,17 @@ def fit_pseudo_voigt(wavenumber: np.ndarray,
 
     try:
         model  = PseudoVoigtModel() + ConstantModel()
-        center_guess = xd[np.argmax(yd)]
         params = model.make_params(
-            center    = dict(value=center_guess, min=lo, max=hi),
+            center    = dict(value=xd[np.argmax(yd)], min=lo, max=hi),
             amplitude = dict(value=yd.max(), min=0),
-            sigma     = dict(value=(hi-lo)/8, min=1.0, max=(hi-lo)/2),
+            sigma     = dict(value=(hi - lo) / 8, min=1.0, max=(hi - lo) / 2),
             fraction  = dict(value=0.5, min=0, max=1),
             c         = dict(value=0, min=0)
         )
         fit = model.fit(yd, params, x=xd)
         p   = fit.params
-
         result.center    = float(p["center"].value)
-        result.fwhm      = float(2 * p["sigma"].value)
+        result.fwhm      = 2.0 * float(p["sigma"].value)
         result.amplitude = float(p["amplitude"].value)
         result.area      = float(np.trapz(fit.best_fit, xd))
         result.r_squared = _r_squared(yd, fit.best_fit)
@@ -144,16 +219,12 @@ def fit_pseudo_voigt(wavenumber: np.ndarray,
 def fit_all_peaks(wavenumber: np.ndarray,
                   intensity:  np.ndarray,
                   laser_nm:   float = 532.0) -> dict[str, PeakResult]:
-    """
-    Fit all graphene Raman peaks and return results dict.
-    """
+    """Fit all graphene/sp² carbon Raman peaks."""
     windows = get_peak_windows(laser_nm)
-    results = {}
-
-    results["D"]        = fit_lorentzian(wavenumber, intensity, windows["D"],       "D")
-    results["G"]        = fit_lorentzian(wavenumber, intensity, windows["G"],       "G")
-    results["D_prime"]  = fit_lorentzian(wavenumber, intensity, windows["D_prime"], "D'")
-    results["2D"]       = fit_lorentzian(wavenumber, intensity, windows["2D"],      "2D")
-    results["DG"]       = fit_pseudo_voigt(wavenumber, intensity, windows["DG"],    "D+G")
-
-    return results
+    return {
+        "D":       fit_lorentzian(wavenumber, intensity, windows["D"],       "D"),
+        "G":       fit_lorentzian(wavenumber, intensity, windows["G"],       "G"),
+        "D_prime": fit_lorentzian(wavenumber, intensity, windows["D_prime"], "D'"),
+        "2D":      fit_2D_peak(wavenumber, intensity, windows["2D"]),
+        "DG":      fit_pseudo_voigt(wavenumber, intensity, windows["DG"],    "D+G"),
+    }
