@@ -95,6 +95,49 @@ Each fitted peak is returned as a `PeakResult` dataclass:
 | `deconv_partner` | PeakResult | D′ component extracted during G deconvolution |
 | `is_split_2D` | bool | True when 2D was fitted with dual-Lorentzian (bilayer) |
 
+## Known Limitations
+
+The following limitations are documented for transparency. Improvements are planned for future releases (see [Roadmap](#roadmap)).
+
+### 2D Band Fitting
+The current implementation uses a **single Lorentzian** for the 2D band. In few-layer graphene (bilayer, trilayer), the 2D band splits into multiple sub-components requiring 4-Lorentzian decomposition. Single-peak fitting for bilayer samples will underestimate FWHM and may misassign the layer count. For monolayer graphene, the single Lorentzian is appropriate.
+> Reference: Ferrari et al. (2006) *Phys. Rev. Lett.* **97**, 187401
+
+### Laser Wavelength Dependence of L_D
+The L_D (defect inter-distance) formula currently uses a simplified form. The full laser-energy-dependent formula from Cançado et al. (2011) is:
+
+```
+L_D² (nm²) ≈ (4.3 × 10³ / E_L⁴) × (I_D / I_G)⁻¹
+```
+
+where E_L is the laser energy in eV. This E_L⁴ dependence becomes significant when comparing measurements across different excitation wavelengths (e.g. 532 nm vs 633 nm vs 785 nm).
+> Reference: Cançado et al. *Nano Lett.* **11**, 3190–3196 (2011)
+
+### Disorder Stage Boundary
+The current Stage 1 / Stage 2 boundary is based on I_D/I_G threshold. A more accurate discrimination uses FWHM(G) combined with A_D/A_G (area ratio), and distinguishes 0D point defects from 1D line/edge defects via the I_D/I_D′ ratio.
+> Reference: Cançado et al. *Carbon* reviews; Eckmann et al. *Nano Lett.* **12**, 3925 (2012)
+
+### Layer Number Accuracy
+Layer estimation from I_2D/I_G is reliable for 1–3 layers. For >5 layers the I_2D/I_G ratio saturates and accuracy decreases significantly. Complementary methods (optical contrast, Si substrate peak ratio) are recommended for thicker samples.
+> Reference: Ferrari & Basko *Nature Nanotechnology* **8**, 235 (2013)
+
+### G+D′ Overlap in GO/rGO
+In graphene oxide (GO) and reduced GO, the G and D′ bands often overlap severely. The current deconvolution assumes two Lorentzians; Claramunt et al. (2015) propose a more robust multi-band metric for this regime.
+> Reference: Claramunt et al. *Sci. Rep.* **5**, 19491 (2015)
+
+## Roadmap
+
+Planned improvements for future releases:
+
+- [ ] **Multi-Lorentzian 2D fitting** — 4-component decomposition for bilayer/trilayer graphene
+- [ ] **Laser-energy-dependent L_D** — full Cançado 2011 formula with E_L⁴ correction
+- [ ] **Fitting uncertainty** — error bars on all peak parameters from covariance matrix
+- [ ] **Intensity normalization** — option to normalize to G peak amplitude or area
+- [ ] **Advanced baseline** — arPLS (asymmetrically reweighted PLS) for noisy/complex spectra
+- [ ] **Doping/strain flags** — detect anomalous G and 2D positions indicating charge doping or strain
+- [ ] **Batch statistics** — mean ± std across all samples for batch runs
+- [ ] **Defect type refinement** — FWHM(G) + A_D/A_G for 0D vs 1D defect discrimination
+
 ## Citation
 
 If you use this software in your research, please cite:
@@ -117,8 +160,10 @@ H.J (2026). *Raman Spectrum Analyzer: Quantitative Analysis of Graphene Raman Sp
 
 - Ferrari & Robertson (2001) *Phys. Rev. B* **64**, 075414 — disorder stage classification
 - Lucchese et al. (2010) *Carbon* **48**, 1592 — L_D formula from I_D/I_G
+- Cançado et al. (2011) *Nano Lett.* **11**, 3190 — laser-energy-dependent L_D and defect density
 - Ferrari & Basko (2013) *Nature Nanotechnology* **8**, 235 — peak conventions & line shapes
-- Eckmann et al. (2012) *Nano Letters* **12**, 3925 — defect type from I_D/I_D′
+- Eckmann et al. (2012) *Nano Lett.* **12**, 3925 — defect type from I_D/I_D′
+- Claramunt et al. (2015) *Sci. Rep.* **5**, 19491 — G+D′ overlap in GO/rGO
 
 ## Project Structure
 
