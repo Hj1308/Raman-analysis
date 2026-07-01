@@ -5,9 +5,9 @@ A Python application for quantitative analysis of Raman spectra of **graphene an
 ## Features
 
 - **Baseline correction** — Asymmetric Least Squares (ALS) algorithm
-- **Peak fitting** — Lorentzian (D, G, D') and Pseudo-Voigt (D+G) using pure `scipy` (no `lmfit` required)
-- **Adaptive G-band fitting** — automatically locates the true G peak position before fitting; handles doped samples where G is near or above 1600 cm⁻¹
-- **G+D′ deconvolution** — dual-Lorentzian separation of overlapping G and D′ bands in disordered/doped graphene
+- **Peak fitting** — Lorentzian (D, G, D′) and Pseudo-Voigt (D+G) using pure `scipy` (no `lmfit` required)
+- **Adaptive G-band fitting** — automatically locates the true G peak position before fitting; handles doped samples where G sits near or above 1600 cm⁻¹
+- **G+D′ deconvolution** — dual-Lorentzian separation of overlapping G and D′ bands in disordered or doped graphene
 - **Quantitative analysis** — I_D/I_G, I_2D/I_G, I_D′/I_G, I_D/I_D′ ratios
 - **Defect characterization** — defect inter-distance L_D, disorder stage, defect type classification
 - **Layer number estimation** — from I_2D/I_G ratio
@@ -21,11 +21,11 @@ A Python application for quantitative analysis of Raman spectra of **graphene an
 |------|---------------------|------------|------------|-----------------|
 | D    | 1270–1450 | fixed | Lorentzian | Breathing mode, requires defect |
 | G    | 1540–1680 (search) | adaptive ±50 cm⁻¹ around detected peak | Lorentzian | E₂g phonon, all sp² carbon |
-| D′   | 1610–1680 (standalone) or deconvolved from G | Lorentzian | Intravalley defect-induced |
+| D′   | 1610–1680 (standalone) or deconvolved from G+D′ fit | Lorentzian | Intravalley defect-induced |
 | 2D   | 2580–2780 | fixed | Lorentzian (or dual) | Second order of D, always active |
 | D+G  | 2850–2960 | fixed | Pseudo-Voigt | Combination band |
 
-> **G-band strategy for doped / disordered samples:** the fitter first locates the true G peak via `find_peaks` in 1540–1680 cm⁻¹, then builds a ±50 cm⁻¹ adaptive window. If the single-Lorentzian R² < 0.60 (overlapping G+D′), a dual-Lorentzian deconvolution is performed automatically. The D′ component from deconvolution is stored in `PeakResult.deconv_partner` and promoted to the `D_prime` result slot if it outperforms the standalone fit.
+> **G-band strategy for doped / disordered samples:** the fitter first locates the true G peak via `find_peaks` in 1540–1680 cm⁻¹, then builds a ±50 cm⁻¹ adaptive window. If the single-Lorentzian R² < 0.60 (e.g. overlapping G+D′ in heavily doped or disordered materials), a dual-Lorentzian deconvolution is performed automatically. The D′ component from deconvolution is stored in `PeakResult.deconv_partner` and promoted to the `D_prime` result slot if it outperforms the standalone fit.
 
 > Peak positions shift with laser wavelength (dispersive peaks: D shifts ~53 cm⁻¹/eV, 2D shifts ~106 cm⁻¹/eV).
 
@@ -37,8 +37,8 @@ cd Raman-analysis
 pip install -r requirements.txt
 ```
 
-**Dependencies:** `numpy`, `scipy`, `matplotlib`, `pandas`, `openpyxl`
-(no `lmfit` required — fitting is pure scipy)
+**Dependencies:** `numpy`, `scipy`, `matplotlib`, `pandas`, `openpyxl`  
+(no `lmfit` required — all fitting uses pure `scipy`)
 
 ## Usage
 
@@ -122,7 +122,7 @@ Raman-analysis/
 ## Changelog
 
 ### Latest — Adaptive G-band & Deconvolution
-- `peak_fitter.py`: G-band window is now **adaptive** — the fitter detects the true G peak location in 1540–1680 cm⁻¹ before fitting, resolving failures on N-doped / B-doped samples (e.g. g-NBSiC) where G sits near 1600 cm⁻¹
+- `peak_fitter.py`: G-band window is now **adaptive** — the fitter detects the true G peak location in 1540–1680 cm⁻¹ before fitting, resolving failures on N-doped / B-doped and disordered graphene where G sits near 1600 cm⁻¹
 - Added `_fit_G_deconvolve()`: automatic **dual-Lorentzian G+D′ deconvolution** when single-peak R² < 0.60
 - `PeakResult` extended with `is_deconvolved` and `deconv_partner` fields
 - Removed `lmfit` dependency; all fitting uses pure `scipy.optimize.curve_fit`
