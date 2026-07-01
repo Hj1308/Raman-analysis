@@ -35,9 +35,8 @@ from src.analyzer    import analyze, format_report
 # ══════════════════════════════════════════════════════════
 #  CONSTANTS
 # ══════════════════════════════════════════════════════════
-# Characters forbidden in Excel sheet names
 SHEET_FORBIDDEN = re.compile(r'[\\/:?*\[\]]')
-SHEET_MAX_LEN   = 28   # leave room for truncation
+SHEET_MAX_LEN   = 28
 
 MATERIAL_GROUPS = {
     "Graphene / sp² Carbon": [
@@ -84,13 +83,6 @@ PEAK_COLORS_TMD = {
 #  HELPERS
 # ══════════════════════════════════════════════════════════
 def validate_sample_name(name: str) -> tuple[bool, str]:
-    """
-    Returns (is_valid, error_message).
-    Rules:
-      - Not empty
-      - No forbidden characters: \ / : ? * [ ]
-      - Max 28 characters
-    """
     name = name.strip()
     if not name:
         return False, "Sample name cannot be empty."
@@ -126,6 +118,45 @@ def _fv(v, fmt=".4f"):
 
 def _make_peak_colors(mat_key):
     return PEAK_COLORS_GRAPHENE if mat_key in ("graphene", "mxene") else PEAK_COLORS_TMD
+
+
+def _parse_sheet_data(xl, sheet_name: str) -> tuple:
+    """
+    Robustly extract (wavenumber, intensity) arrays from a template sheet.
+
+    Template layout:
+        Row 1 (index 0): label header  "Sample Name ..."
+        Row 2 (index 1): sample name value  (yellow cell B2)
+        Row 3 (index 2): column headers  "Wavenumber (cm-1)" / "Intensity (a.u.)"
+        Row 4+ (index 3+): numeric data in columns B and C (index 1 and 2)
+
+    Fallback: scan every row pair (col B, col C) for the first fully-numeric
+    pair, then treat everything from that row onward as data.
+    """
+    df = xl.parse(sheet_name, header=None)
+
+    # --- Strategy 1: template format (data from row index 3, cols 1 & 2) ---
+    if df.shape[0] > 3 and df.shape[1] > 2:
+        candidate = df.iloc[3:, [1, 2]].copy()
+        candidate.columns = ["wavenumber", "intensity"]
+        candidate = candidate.apply(pd.to_numeric, errors="coerce").dropna()
+        if len(candidate) >= 10:
+            return candidate["wavenumber"].values, candidate["intensity"].values
+
+    # --- Strategy 2: scan all rows for first numeric pair (any two-col layout) ---
+    for start in range(df.shape[0]):
+        for col_pair in [(1, 2), (0, 1)]:
+            if df.shape[1] > col_pair[1]:
+                chunk = df.iloc[start:, list(col_pair)].copy()
+                chunk.columns = ["wavenumber", "intensity"]
+                chunk = chunk.apply(pd.to_numeric, errors="coerce").dropna()
+                if len(chunk) >= 10:
+                    return chunk["wavenumber"].values, chunk["intensity"].values
+
+    raise ValueError(
+        f"Sheet '{sheet_name}': could not find numeric wavenumber/intensity data. "
+        "Make sure data starts from row 4 in columns B and C."
+    )
 
 
 # ══════════════════════════════════════════════════════════
@@ -305,7 +336,7 @@ def run_analysis(wn, intensity, mat_key, group, laser_nm,
 
 
 # ══════════════════════════════════════════════════════════
-#  EXCEL TEMPLATE  (now includes Sample Name column)
+#  EXCEL TEMPLATE
 # ══════════════════════════════════════════════════════════
 def make_template(n_samples: int) -> bytes:
     wb = Workbook()
@@ -316,7 +347,6 @@ def make_template(n_samples: int) -> bytes:
     BF = Font(name="Calibri", bold=True, size=11, color="7F6000")
     C  = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    # ── Instructions sheet ──────────────────────────────
     ws_inst = wb.create_sheet("READ ME FIRST", 0)
     ws_inst.sheet_properties.tabColor = "FF0000"
     ws_inst.sheet_view.showGridLines   = False
@@ -334,7 +364,7 @@ def make_template(n_samples: int) -> bytes:
         ("Step 1",
          "Go to each sample sheet (Sample_1, Sample_2, …)."),
         ("Step 2",
-         "In cell A2, type your sample name.\n"
+         "In cell B2 (yellow), type your sample name.\n"
          "RULES for sample name:\n"
          "  • No forbidden characters:  / \\ : ? * [ ]\n"
          "  • Maximum 28 characters\n"
@@ -359,13 +389,11 @@ def make_template(n_samples: int) -> bytes:
             wrap_text=True, vertical="top")
         ws_inst.row_dimensions[r + 1].height = 70
 
-    # ── Sample sheets ───────────────────────────────────
     for i in range(1, n_samples + 1):
         ws = wb.create_sheet(title=f"Sample_{i}")
         ws.sheet_view.showGridLines = False
         ws.sheet_properties.tabColor = "2E75B6"
 
-        # Row 1: Sample name label + yellow input cell
         ws.merge_cells("B1:C1")
         ws["B1"] = "Sample Name  (no / \\ : ? * [ ] — max 28 chars)"
         ws["B1"].font      = Font(name="Calibri", bold=True, size=10, color="7F6000")
@@ -379,7 +407,6 @@ def make_template(n_samples: int) -> bytes:
         ws["B2"].alignment = Alignment(horizontal="center", vertical="center")
         ws.row_dimensions[2].height = 22
 
-        # Row 3: data headers
         ws.row_dimensions[3].height = 22
         for col, header in enumerate(["Wavenumber (cm-1)", "Intensity (a.u.)"], start=2):
             cell = ws.cell(row=3, column=col, value=header)
@@ -412,7 +439,6 @@ def build_excel_report(samples_results, laser_nm):
         s = Side(style="thin", color="BDD7EE")
         return Border(left=s, right=s, top=s, bottom=s)
 
-    # Summary sheet
     ws_sum = wb.create_sheet("Summary")
     ws_sum.sheet_view.showGridLines = False
     ws_sum.sheet_properties.tabColor = "1F4E79"
@@ -465,7 +491,6 @@ def build_excel_report(samples_results, laser_nm):
     for ci, w in enumerate(col_ws):
         ws_sum.column_dimensions[get_column_letter(2 + ci)].width = w
 
-    # Per-sample sheets
     for sr in samples_results:
         sname = sr["name"][:28]
         ws    = wb.create_sheet(title=sname)
@@ -483,7 +508,6 @@ def build_excel_report(samples_results, laser_nm):
         ws["B3"].font = Font(name="Calibri", size=10, color="7F7F7F", italic=True)
         ws["B3"].alignment = C
 
-        # Analysis params
         ws.merge_cells("B5:G5")
         ws.cell(row=5, column=2, value="Analysis Parameters").font = Font(
             name="Calibri", bold=True, color="1F4E79", size=13)
@@ -503,7 +527,6 @@ def build_excel_report(samples_results, laser_nm):
             ws.cell(row=r, column=3).alignment = C
             ws.row_dimensions[r].height = 20
 
-        # Peaks table
         pk_start = 7 + len(sr["analysis"]) + 2
         ws.merge_cells(f"B{pk_start}:G{pk_start}")
         ws.cell(row=pk_start, column=2, value="Fitted Peaks").font = Font(
@@ -533,7 +556,6 @@ def build_excel_report(samples_results, laser_nm):
                 ws.cell(row=r, column=3, value="Not detected").font = N
             ws.row_dimensions[r].height = 20
 
-        # Spectrum data
         ds = pk_start + 2 + len(sr["peaks"]) + 2
         ws.merge_cells(f"B{ds}:G{ds}")
         ws.cell(row=ds, column=2, value="Spectrum Data").font = Font(
@@ -569,7 +591,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Sidebar ───────────────────────────────────────────────
 with st.sidebar:
     st.title("🔬 Raman Analyzer")
     st.caption("Graphene · TMDs · h-BN · BP · MXene")
@@ -612,10 +633,9 @@ with st.sidebar:
     st.subheader("📤 Step 2 — Upload Filled Template")
     uploaded = st.file_uploader(
         "Upload Excel file", type=["xlsx"],
-        help="Each sheet = one sample. Fill sample name in the yellow cell."
+        help="Each sheet = one sample. Fill sample name in the yellow cell B2."
     )
 
-# ── Main ──────────────────────────────────────────────────
 st.title("Raman Spectrum Analyzer — 2D Materials")
 st.caption("Graphene / rGO / GO / TMDs / h-BN / Black Phosphorus / MXene")
 
@@ -635,22 +655,25 @@ if uploaded is None:
         """)
     st.stop()
 
-# ── Read uploaded file ────────────────────────────────────
 try:
     xl     = pd.ExcelFile(uploaded)
-    sheets = xl.sheet_names
+    sheets = [s for s in xl.sheet_names if not str(s).upper().startswith("READ")]
 except Exception as e:
     st.error(f"Cannot read Excel file: {e}")
     st.stop()
 
-# ── Read sample names from yellow cell B2 ────────────────
+if not sheets:
+    st.error("No data sheets found. Make sure your file has sheets with sample data.")
+    st.stop()
+
 def read_sample_name_from_sheet(xl, sheet):
-    """Try to read custom name from B2; fall back to sheet title."""
+    """Read custom name from cell B2 (index [1,1]); fall back to sheet title."""
     try:
         df_peek = xl.parse(sheet, header=None, nrows=3)
-        val = str(df_peek.iloc[1, 1]).strip()  # row index 1 = row 2, col index 1 = col B
-        if val and val.lower() not in ("nan", "", "none"):
-            return val
+        if df_peek.shape[0] > 1 and df_peek.shape[1] > 1:
+            val = str(df_peek.iloc[1, 1]).strip()
+            if val and val.lower() not in ("nan", "", "none"):
+                return val
     except Exception:
         pass
     return sheet
@@ -662,11 +685,10 @@ st.caption("Material group and specific material are selected **outside the form
 
 group_options = list(MATERIAL_GROUPS.keys())
 
-# ── Per-sample configuration (OUTSIDE form for dynamic update) ──
 if "sample_configs" not in st.session_state:
     st.session_state.sample_configs = {}
 
-name_errors = []
+name_errors   = []
 final_configs = []
 
 for i, sheet in enumerate(sheets):
@@ -677,7 +699,6 @@ for i, sheet in enumerate(sheets):
         st.markdown(f"**Sample {i+1} — Sheet: `{sheet}`**")
         col_name, col_group, col_mat = st.columns([2, 3, 3])
 
-        # Sample name with live validation
         sample_name = col_name.text_input(
             "Sample name", value=default_name, key=f"{key_prefix}_name"
         )
@@ -709,7 +730,7 @@ if run_disabled:
 
 if st.button("▶  RUN ANALYSIS", type="primary",
               use_container_width=True, disabled=run_disabled):
-    st.session_state["run"] = True
+    st.session_state["run"]     = True
     st.session_state["configs"] = final_configs
 
 if not st.session_state.get("run"):
@@ -723,18 +744,10 @@ samples_results, errors = [], []
 
 for i, cfg in enumerate(configs):
     try:
-        df = xl.parse(cfg["sheet"], header=None)
-        # Data starts at row 3 (index 3) for new template; fallback: find numeric rows
-        # Try to detect data start row automatically
-        data_rows = df.apply(lambda r: pd.to_numeric(r, errors="coerce").notna().all(), axis=1)
-        first_data = data_rows[data_rows].index.min() if data_rows.any() else 3
-        df_data = df.iloc[first_data:, :2].copy()
-        df_data.columns = ["wavenumber", "intensity"]
-        df_data = df_data.apply(pd.to_numeric, errors="coerce").dropna()
-
-        wn        = df_data["wavenumber"].values
-        intensity = df_data["intensity"].values
-        sort_idx  = np.argsort(wn)
+        # _parse_sheet_data handles template layout correctly:
+        # skips rows 1-3 (label/name/header), reads cols B & C (index 1 & 2)
+        wn, intensity = _parse_sheet_data(xl, cfg["sheet"])
+        sort_idx      = np.argsort(wn)
         wn, intensity = wn[sort_idx], intensity[sort_idx]
 
         mat_key = _material_key(cfg["group"], cfg["material"])
