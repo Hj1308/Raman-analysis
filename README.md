@@ -1,5 +1,9 @@
 # Raman Spectrum Analyzer 🔬
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21109057.svg)](https://doi.org/10.5281/zenodo.21109057)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 A Python application for quantitative analysis of Raman spectra of **graphene and graphene-like (sp² carbon) materials**, with robust support for **doped and disordered graphene** (N-doped, B-doped, amorphous carbon).
 
 ## Features
@@ -90,6 +94,24 @@ Each fitted peak is returned as a `PeakResult` dataclass:
 | `is_deconvolved` | bool | True when G was separated from D′ by dual-Lorentzian |
 | `deconv_partner` | PeakResult | D′ component extracted during G deconvolution |
 | `is_split_2D` | bool | True when 2D was fitted with dual-Lorentzian (bilayer) |
+
+## Citation
+
+If you use this software in your research, please cite:
+
+```bibtex
+@software{raman_analyzer_2026,
+  author    = {H.J},
+  title     = {Raman Spectrum Analyzer: Quantitative Analysis of Graphene Raman Spectra},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.21109057},
+  url       = {https://doi.org/10.5281/zenodo.21109057}
+}
+```
+
+Or in plain text:  
+H.J (2026). *Raman Spectrum Analyzer: Quantitative Analysis of Graphene Raman Spectra*. Zenodo. https://doi.org/10.5281/zenodo.21109057
 
 ## Scientific References
 
