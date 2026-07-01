@@ -1,5 +1,5 @@
 """
-Peak fitting module — pure scipy (no lmfit dependency).
+Peak fitting module — scipy core, optional lmfit for advanced models.
 Line shapes per Ferrari & Basko (2013):
   D, G, D', 2D  -> Lorentzian
   D+G           -> Pseudo-Voigt
@@ -14,12 +14,24 @@ G-band strategy for doped / disordered graphene:
   2. Build an adaptive ±50 cm⁻¹ window centred on the detected peak.
   3. If single-Lorentzian R² < 0.60, attempt G+D' dual-Lorentzian deconvolution.
   This handles N-doped / B-doped samples where G and D' overlap or G is near 1600 cm⁻¹.
+
+band_config (optional):
+  Dict keyed by band name ('D','G','D_prime','2D','DG') with entries:
+    {
+      "method":     "auto"|"adaptive"|"deconvolve"|"lmfit",  # default "auto"
+      "model":      "Lorentzian"|"Gaussian"|"Voigt",          # lmfit only
+      "asymmetric": False,                                     # lmfit only
+      "local_bg":   False,                                     # lmfit only
+    }
+  If band_config is None or a band key is absent, the original scipy logic runs unchanged.
+  "lmfit" method requires lmfit to be installed; falls back to scipy if not available.
 """
 
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks as _sp_find_peaks
 from dataclasses import dataclass, field
+from typing import Optional
 
 # ── Peak search windows (cm⁻¹) at 532 nm ─────────────────
 PEAK_WINDOWS_532 = {
@@ -31,8 +43,8 @@ PEAK_WINDOWS_532 = {
 }
 
 # Broad window used to *locate* the G peak before building adaptive window
-_G_SEARCH_LO = 1540.0
-_G_SEARCH_HI = 1680.0
+_G_SEARCH_LO  = 1540.0
+_G_SEARCH_HI  = 1680.0
 _G_HALF_WIDTH = 50.0   # cm⁻¹ each side of detected centre
 
 _DISP_D_PER_NM  = 0.174
@@ -53,20 +65,32 @@ def get_peak_windows(laser_nm: float) -> dict:
     return windows
 
 
+# ── lmfit availability check ───────────────────────────────
+def _lmfit_available() -> bool:
+    try:
+        import lmfit  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 @dataclass
 class PeakResult:
     name:            str
-    center:          float      = np.nan
-    amplitude:       float      = np.nan   # peak height (a.u.)
-    fwhm:            float      = np.nan   # cm⁻¹
-    area:            float      = np.nan   # integrated area
-    r_squared:       float      = np.nan
-    found:           bool       = False
-    is_split_2D:     bool       = False
-    is_deconvolved:  bool       = False    # True when G was separated from D' by dual-Lorentzian
+    center:          float            = np.nan
+    amplitude:       float            = np.nan   # peak height (a.u.)
+    fwhm:            float            = np.nan   # cm⁻¹
+    area:            float            = np.nan   # integrated area
+    r_squared:       float            = np.nan
+    found:           bool             = False
+    is_split_2D:     bool             = False
+    is_deconvolved:  bool             = False    # True when G was separated from D' by dual-Lorentzian
     deconv_partner:  "PeakResult | None" = field(default=None, repr=False)  # D' component
-    model_x:         np.ndarray = field(default_factory=lambda: np.array([]))
-    model_y:         np.ndarray = field(default_factory=lambda: np.array([]))
+    model_x:         np.ndarray       = field(default_factory=lambda: np.array([]))
+    model_y:         np.ndarray       = field(default_factory=lambda: np.array([]))
+    # uncertainty fields — populated only by lmfit path
+    center_stderr:   Optional[float]  = field(default=None)
+    fwhm_stderr:     Optional[float]  = field(default=None)
 
 
 # ── Line shapes ───────────────────────────────────────
@@ -93,6 +117,44 @@ def _r2(y_obs, y_fit):
     return 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
 
+# ── Numerical FWHM (used for asymmetric profiles) ─────────
+def compute_fwhm_numerical(x: np.ndarray, y: np.ndarray) -> float:
+    """
+    Interpolation-based FWHM. Works for any peak shape including asymmetric.
+    Returns np.nan if the profile doesn't cross the half-maximum on both sides.
+    """
+    if len(y) < 3:
+        return np.nan
+    half_max = float(np.max(y)) / 2.0
+    above = y >= half_max
+    if not np.any(above):
+        return np.nan
+    idx = np.where(above)[0]
+
+    # left crossing
+    if idx[0] > 0:
+        x_left = float(np.interp(
+            half_max,
+            [y[idx[0] - 1], y[idx[0]]],
+            [x[idx[0] - 1], x[idx[0]]],
+        ))
+    else:
+        x_left = float(x[idx[0]])
+
+    # right crossing
+    if idx[-1] < len(x) - 1:
+        x_right = float(np.interp(
+            half_max,
+            [y[idx[-1] + 1], y[idx[-1]]],
+            [x[idx[-1] + 1], x[idx[-1]]],
+        ))
+    else:
+        x_right = float(x[idx[-1]])
+
+    fwhm = x_right - x_left
+    return fwhm if fwhm > 0 else np.nan
+
+
 # ── G-peak locator ────────────────────────────────────
 def _find_G_peak(wn: np.ndarray, intensity: np.ndarray) -> float:
     """
@@ -113,12 +175,11 @@ def _find_G_peak(wn: np.ndarray, intensity: np.ndarray) -> float:
     if len(pk_idx) == 0:
         return float(xs[np.argmax(ys)])
 
-    # pick the most prominent peak
     best = pk_idx[np.argmax(props["prominences"])]
     return float(xs[best])
 
 
-# ── Single-peak fitter ─────────────────────────────────
+# ── Single-peak fitter (scipy) ─────────────────────────────
 def _fit_peak(wn, intensity, lo, hi, name, use_pseudo_voigt=False):
     mask = (wn >= lo) & (wn <= hi)
     xd   = wn[mask]
@@ -188,7 +249,6 @@ def _fit_G_adaptive(wn: np.ndarray, intensity: np.ndarray) -> PeakResult:
     if result.found:
         return result
 
-    # ── Deconvolution: G + D' dual-Lorentzian ──
     return _fit_G_deconvolve(wn, intensity, g_centre)
 
 
@@ -212,8 +272,7 @@ def _fit_G_deconvolve(
     if len(xd) < 8:
         return result
 
-    a0 = float(yd.max())
-    # G initial: near detected hint; D' ~20 cm⁻¹ above G
+    a0   = float(yd.max())
     c_G  = float(np.clip(g_centre_hint, 1540.0, 1640.0))
     c_Dp = float(np.clip(c_G + 20.0,   1560.0, 1680.0))
 
@@ -231,7 +290,6 @@ def _fit_G_deconvolve(
         y_fit = _dual_lorentzian(xd, *popt)
         r2    = _r2(yd, y_fit)
 
-        # assign G = lower-wavenumber component
         if popt[0] <= popt[3]:
             c_g, a_g, gam_g = popt[0], popt[1], popt[2]
             c_d, a_d, gam_d = popt[3], popt[4], popt[5]
@@ -252,15 +310,15 @@ def _fit_G_deconvolve(
             model_y=_lorentzian(xd, c_d, a_d, gam_d),
         )
 
-        result.center          = c_g
-        result.amplitude       = a_g
-        result.fwhm            = 2.0 * gam_g
-        result.area            = np.pi * a_g * gam_g
-        result.r_squared       = r2
-        result.found           = r2 > 0.60
-        result.is_deconvolved  = True
-        result.deconv_partner  = d_prime
-        result.model_y         = _lorentzian(xd, c_g, a_g, gam_g)
+        result.center         = c_g
+        result.amplitude      = a_g
+        result.fwhm           = 2.0 * gam_g
+        result.area           = np.pi * a_g * gam_g
+        result.r_squared      = r2
+        result.found          = r2 > 0.60
+        result.is_deconvolved = True
+        result.deconv_partner = d_prime
+        result.model_y        = _lorentzian(xd, c_g, a_g, gam_g)
 
     except Exception:
         pass
@@ -318,14 +376,180 @@ def _fit_2D(wn, intensity, lo, hi):
     return single
 
 
-# ── Public API ─────────────────────────────────────────
-def fit_all_peaks(
+# ── lmfit-based single-band fitter ────────────────────
+def _fit_single_band_lmfit(
     wn: np.ndarray,
     intensity: np.ndarray,
-    laser_nm: float = 532.0,
+    band_name: str,
+    cfg: dict,
+    windows: dict,
+) -> PeakResult:
+    """
+    Fit one band using lmfit.  Supports:
+      - model: 'Lorentzian' | 'Gaussian' | 'Voigt'
+      - asymmetric: True → custom asymmetric Lorentzian
+      - local_bg: True → add LinearModel (only when ALS residual slope is visible)
+
+    Returns PeakResult compatible with the existing dataclass.
+    Scientific note: Gaussian for the G band is physically meaningful only for
+    highly disordered / amorphous carbons. A warning is embedded in the name.
+    """
+    import lmfit
+    from lmfit.models import LorentzianModel, GaussianModel, VoigtModel, LinearModel
+
+    lo, hi = windows.get(band_name, (1500, 1650))
+    mask   = (wn >= lo) & (wn <= hi)
+    xd, yd = wn[mask], intensity[mask]
+
+    empty = PeakResult(name=band_name, found=False, model_x=xd,
+                       model_y=np.zeros_like(xd))
+    if len(xd) < 5 or yd.max() <= 0:
+        return empty
+
+    c0  = float(xd[np.argmax(yd)])
+    a0  = float(yd.max())
+    w0  = (hi - lo) / 6.0     # initial half-width guess
+    asym = cfg.get("asymmetric", False)
+    model_type = cfg.get("model", "Lorentzian")
+    use_bg     = cfg.get("local_bg", False)
+
+    # ── Build model ────────────────────────────────────
+    if asym:
+        # Custom asymmetric Lorentzian
+        def _asym_lor(x, center, sigma_l, sigma_r, amplitude):
+            sig = np.where(x < center, sigma_l, sigma_r)
+            return amplitude * (sig ** 2 / ((x - center) ** 2 + sig ** 2))
+
+        peak_model = lmfit.Model(_asym_lor, prefix="peak_")
+        params = peak_model.make_params(
+            center    = dict(value=c0, min=lo, max=hi),
+            sigma_l   = dict(value=w0, min=1.0, max=(hi-lo)/2),
+            sigma_r   = dict(value=w0, min=1.0, max=(hi-lo)/2),
+            amplitude = dict(value=a0, min=0),
+        )
+    else:
+        if model_type == "Lorentzian":
+            peak_model = LorentzianModel(prefix="peak_")
+        elif model_type == "Gaussian":
+            peak_model = GaussianModel(prefix="peak_")
+        elif model_type == "Voigt":
+            peak_model = VoigtModel(prefix="peak_")
+        else:
+            peak_model = LorentzianModel(prefix="peak_")
+
+        params = peak_model.make_params(
+            center    = dict(value=c0, min=lo, max=hi),
+            sigma     = dict(value=w0, min=1.0, max=(hi-lo)/2),
+            amplitude = dict(value=a0 * w0, min=0),   # lmfit amplitude = area-like for Lorentzian
+        )
+        if model_type == "Voigt":
+            # gamma is Lorentzian HWHM (cm⁻¹), not a fraction
+            params["peak_gamma"].set(value=w0 * 0.5, min=0.5, max=(hi-lo)/2, vary=True)
+
+    # ── Optional linear background (use sparingly after ALS) ──
+    full_model = peak_model
+    if use_bg:
+        lin = LinearModel(prefix="lin_")
+        params.update(lin.make_params(
+            slope     = dict(value=0.0),
+            intercept = dict(value=float(np.min(yd))),
+        ))
+        full_model = peak_model + lin
+
+    # ── Fit ────────────────────────────────────────────
+    try:
+        result = full_model.fit(yd, params, x=xd)
+    except Exception:
+        return empty
+
+    if not result.success and result.rsquared < 0.40:
+        return empty
+
+    # ── Extract PeakResult ─────────────────────────────
+    model_y = result.eval(x=xd)
+    r2      = float(result.rsquared)
+
+    if asym:
+        center    = float(result.params["peak_center"].value)
+        amplitude = float(result.params["peak_amplitude"].value)
+        fwhm      = compute_fwhm_numerical(xd, model_y)
+        c_err     = result.params["peak_center"].stderr
+        fwhm_err  = None   # no closed form for asymmetric
+    else:
+        center    = float(result.params["peak_center"].value)
+        fwhm      = compute_fwhm_numerical(xd, model_y)
+        c_err     = result.params["peak_center"].stderr
+        sig_err   = result.params["peak_sigma"].stderr
+        fwhm_err  = (2.0 * sig_err) if sig_err is not None else None
+        # recover peak height from lmfit amplitude definition
+        if model_type == "Lorentzian":
+            gamma_v   = float(result.params["peak_sigma"].value)
+            amplitude = float(result.params["peak_amplitude"].value) / (np.pi * max(gamma_v, 1e-9))
+        elif model_type == "Gaussian":
+            sigma_v   = float(result.params["peak_sigma"].value)
+            amplitude = float(result.params["peak_amplitude"].value) / (sigma_v * np.sqrt(2 * np.pi))
+        else:  # Voigt — use max of evaluated profile
+            amplitude = float(np.max(model_y))
+
+    # scientific note for Gaussian G band
+    display_name = band_name
+    if band_name == "G" and model_type == "Gaussian":
+        display_name = "G[Gauss!]"   # visible warning in report table
+
+    peak = PeakResult(
+        name          = display_name,
+        center        = center,
+        amplitude     = amplitude,
+        fwhm          = fwhm,
+        area          = float(np.trapz(model_y, xd)),
+        r_squared     = r2,
+        found         = r2 > 0.60,
+        model_x       = xd,
+        model_y       = model_y,
+        center_stderr = float(c_err) if c_err is not None else None,
+        fwhm_stderr   = float(fwhm_err) if fwhm_err is not None else None,
+    )
+    return peak
+
+
+# ── Public API ─────────────────────────────────────────
+def fit_all_peaks(
+    wn:          np.ndarray,
+    intensity:   np.ndarray,
+    laser_nm:    float = 532.0,
+    band_config: Optional[dict] = None,
 ) -> dict[str, PeakResult]:
     """
     Fit all Raman peaks for graphene / sp² carbon.
+
+    Parameters
+    ----------
+    wn, intensity : array_like
+        Wavenumber axis and baseline-corrected intensity.
+    laser_nm : float
+        Excitation wavelength in nm (default 532).
+    band_config : dict or None
+        Optional per-band fitting configuration.  When None (default) the
+        original scipy logic runs unchanged — fully backward compatible.
+
+        Example (only override what you need):
+          band_config = {
+              "G": {"method": "adaptive"},      # explicit adaptive (same as default)
+              "D": {"method": "lmfit",
+                    "model": "Lorentzian",
+                    "asymmetric": True,
+                    "local_bg": False},
+          }
+
+        method values:
+          "auto"        — use original scipy logic (default when key absent)
+          "adaptive"    — force _fit_G_adaptive (G band only)
+          "deconvolve"  — force _fit_G_deconvolve (G band only)
+          "lmfit"       — use lmfit backend; falls back to scipy if lmfit absent
+
+    Returns
+    -------
+    dict keyed by peak name: 'D', 'G', 'D_prime', '2D', 'DG'
 
     G-band strategy (doping-aware):
       1. Locate G peak via find_peaks in 1540–1680 cm⁻¹.
@@ -333,21 +557,57 @@ def fit_all_peaks(
       3. If R² < 0.60: dual-Lorentzian G+D' deconvolution in 1480–1700 cm⁻¹.
       The deconvolved D' component is stored in results['G'].deconv_partner
       and also promoted to results['D_prime'] if that slot is empty or weaker.
-
-    Returns dict keyed by peak name: 'D', 'G', 'D_prime', '2D', 'DG'.
     """
-    windows = get_peak_windows(laser_nm)
+    windows  = get_peak_windows(laser_nm)
+    band_cfg = band_config or {}
+    use_lmfit = _lmfit_available()
     results: dict[str, PeakResult] = {}
 
-    results["D"]  = _fit_peak(wn, intensity, *windows["D"], "D")
+    # ── Helper: resolve method for a band ──────────────
+    def _method(band: str) -> str:
+        cfg = band_cfg.get(band, {})
+        m   = cfg.get("method", "auto")
+        if m == "lmfit" and not use_lmfit:
+            m = "auto"   # graceful fallback
+        return m
 
-    # G — adaptive / deconvolution
-    g_result = _fit_G_adaptive(wn, intensity)
-    results["G"] = g_result
+    # ── D band ─────────────────────────────────────────
+    d_method = _method("D")
+    if d_method == "lmfit":
+        results["D"] = _fit_single_band_lmfit(wn, intensity, "D",
+                                               band_cfg["D"], windows)
+    else:
+        results["D"] = _fit_peak(wn, intensity, *windows["D"], "D")
 
-    # D' — use deconvolved component if available and better than standalone fit
+    # ── G band ─────────────────────────────────────────
+    g_method = _method("G")
+    if g_method == "lmfit":
+        results["G"] = _fit_single_band_lmfit(wn, intensity, "G",
+                                               band_cfg["G"], windows)
+        g_result = results["G"]
+    elif g_method == "deconvolve":
+        g_centre = _find_G_peak(wn, intensity)
+        g_result = _fit_G_deconvolve(wn, intensity, g_centre)
+        results["G"] = g_result
+    else:
+        # "auto" or "adaptive" — original proven logic
+        g_result = _fit_G_adaptive(wn, intensity)
+        results["G"] = g_result
+
+    # ── D' band ─────────────────────────────────────────
+    dp_method = _method("D_prime")
     standalone_dp = _fit_peak(wn, intensity, *windows["D_prime"], "D'")
-    if g_result.is_deconvolved and g_result.deconv_partner is not None:
+
+    if dp_method == "lmfit":
+        lmfit_dp = _fit_single_band_lmfit(wn, intensity, "D_prime",
+                                           band_cfg["D_prime"], windows)
+        # use lmfit result if better than standalone scipy
+        if lmfit_dp.found and (not standalone_dp.found or
+                                lmfit_dp.r_squared >= standalone_dp.r_squared):
+            results["D_prime"] = lmfit_dp
+        else:
+            results["D_prime"] = standalone_dp
+    elif g_result.is_deconvolved and g_result.deconv_partner is not None:
         dp = g_result.deconv_partner
         if not standalone_dp.found or dp.r_squared >= standalone_dp.r_squared:
             results["D_prime"] = dp
@@ -356,8 +616,21 @@ def fit_all_peaks(
     else:
         results["D_prime"] = standalone_dp
 
-    results["2D"]  = _fit_2D(wn, intensity, *windows["2D"])
-    results["DG"]  = _fit_peak(wn, intensity, *windows["DG"], "D+G",
-                                use_pseudo_voigt=True)
+    # ── 2D band ─────────────────────────────────────────
+    td_method = _method("2D")
+    if td_method == "lmfit":
+        results["2D"] = _fit_single_band_lmfit(wn, intensity, "2D",
+                                                band_cfg["2D"], windows)
+    else:
+        results["2D"] = _fit_2D(wn, intensity, *windows["2D"])
+
+    # ── D+G band ─────────────────────────────────────────
+    dg_method = _method("DG")
+    if dg_method == "lmfit":
+        results["DG"] = _fit_single_band_lmfit(wn, intensity, "DG",
+                                                band_cfg["DG"], windows)
+    else:
+        results["DG"] = _fit_peak(wn, intensity, *windows["DG"], "D+G",
+                                   use_pseudo_voigt=True)
 
     return results
