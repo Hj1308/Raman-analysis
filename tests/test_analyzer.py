@@ -7,9 +7,9 @@ Fix log
 
   1. test_LD_formula_532nm
      The Cancado 2011 formula is:
-         L_D(nm) = sqrt( (1.8e-9 * lambda_nm^4) / (ID/IG) )
-     For ID/IG = 1.0, lambda = 532 nm:
-         L_D = sqrt(1.8e-9 * 532^4) = sqrt(1.8e-9 * 7.998e10)
+         L_D(nm) = sqrt( 1.8e-9 * lambda_nm^4 / (AD/AG) )
+     For AD/AG = 1.0, lambda = 532 nm:
+         L_D = sqrt(1.8e-9 * 532**4) = sqrt(1.8e-9 * 7.998e10)
               = sqrt(143.96) ~ 12.0 nm
      The old expected value 230432 was wrong (used lambda in m, not nm).
      Corrected expected ~12 nm, tolerance 2 %.
@@ -25,6 +25,15 @@ Fix log
      The synthetic 2D peak has FWHM = 30 cm-1 which is < 35 cm-1
      threshold -> twoD_fwhm_warning should be False (no warning).
      Old test expected True.  Fix: assert False.
+
+  Fix 1.1  L_D now uses A_D/A_G (area ratio), not I_D/I_G (height ratio).
+     Updated tests:
+       - test_LD_formula_532nm: D.area / G.area = 1.0 explicitly.
+       - test_LD_increases_lower_defects: controlled area values.
+       - test_LD_area_not_height: regression test proving Fix 1.1 active.
+       - test_ID_IG_area_used_for_LD: explicit proof-of-fix assertion.
+     New class TestBoronDopingAreaRatio: verifies _check_boron_doping
+       uses ID_IG_area threshold, not ID_IG_height.
 """
 
 import math
@@ -65,15 +74,32 @@ def _mock_peak(name="G", center=1582.0, amplitude=100.0, fwhm=20.0,
 
 
 def _peaks_DG(id_ig=0.3, i2d_ig=2.0, fwhm_2d=30.0, fwhm_g=16.0,
-              g_center=1582.0):
-    """Return a minimal peaks dict with D + G + 2D."""
-    g_amp = 100.0
-    d_amp = g_amp * id_ig
-    twoD_amp = g_amp * i2d_ig
+              g_center=1582.0, area_ratio=None):
+    """Return a minimal peaks dict with D + G + 2D.
+
+    Parameters
+    ----------
+    id_ig : float
+        Amplitude (height) ratio D/G.  Used for ID_IG_height.
+    area_ratio : float or None
+        A_D/A_G integrated area ratio.  If None, set equal to id_ig
+        so that both height and area ratios are the same (backward-
+        compatible behaviour for tests that don\'t care about the
+        distinction).  Set explicitly when testing Fix 1.1 behaviour.
+    """
+    g_amp  = 100.0
+    g_area = 2500.0
+    d_amp  = g_amp * id_ig
+    # Fix 1.1: area ratio may differ from amplitude ratio
+    if area_ratio is None:
+        area_ratio = id_ig
+    d_area = g_area * area_ratio
+    twoD_amp  = g_amp  * i2d_ig
+    twoD_area = g_area * i2d_ig
     return {
-        "G":  _mock_peak("G",  g_center,  g_amp,    fwhm_g,  g_amp * 25),
-        "D":  _mock_peak("D",  1350.0,    d_amp,    30.0,    d_amp * 25),
-        "2D": _mock_peak("2D", 2690.0,    twoD_amp, fwhm_2d, twoD_amp * 25),
+        "G":  _mock_peak("G",  g_center,  g_amp,    fwhm_g,  g_area),
+        "D":  _mock_peak("D",  1350.0,    d_amp,    30.0,    d_area),
+        "2D": _mock_peak("2D", 2690.0,    twoD_amp, fwhm_2d, twoD_area),
     }
 
 
@@ -103,16 +129,23 @@ class TestRatios:
         r = analyze(peaks, laser_nm=532)
         assert abs(r.ID_IG_height - 0.5) < 1e-6
 
+    def test_ID_IG_area(self):
+        """ID_IG_area must equal the explicit area ratio, not amplitude ratio."""
+        peaks = _peaks_DG(id_ig=0.5, area_ratio=0.8)
+        r = analyze(peaks, laser_nm=532)
+        assert abs(r.ID_IG_area - 0.8) < 1e-6, (
+            "ID_IG_area should be 0.8 (area_ratio), not {:.4f}".format(r.ID_IG_area))
+
     def test_I2D_IG_height(self):
         peaks = _peaks_DG(i2d_ig=2.0)
         r = analyze(peaks, laser_nm=532)
         assert abs(r.I2D_IG_height - 2.0) < 1e-6
 
     def test_ID_IDp_height(self):
-        g = _mock_peak("G", 1582.0, 100.0, 16.0, 2500.0)
-        d = _mock_peak("D", 1350.0,  70.0, 30.0, 1750.0)
+        g  = _mock_peak("G", 1582.0, 100.0, 16.0, 2500.0)
+        d  = _mock_peak("D", 1350.0,  70.0, 30.0, 1750.0)
         dp = _mock_peak("D_prime", 1620.0, 10.0, 14.0, 140.0)
-        r = analyze({"G": g, "D": d, "D_prime": dp}, laser_nm=532)
+        r  = analyze({"G": g, "D": d, "D_prime": dp}, laser_nm=532)
         assert abs(r.ID_IDp_height - 7.0) < 1e-6
 
     def test_no_graphitization_pct(self):
@@ -123,48 +156,156 @@ class TestRatios:
 
 
 # ---------------------------------------------------------------------------
-# L_D formula  (Cancado et al. 2011)
+# L_D formula  (Cancado et al. 2011)  — Fix 1.1: uses A_D/A_G area ratio
 # ---------------------------------------------------------------------------
 
 class TestLD:
     def test_LD_formula_532nm(self):
         """
-        Cancado 2011:  L_D(nm) = sqrt( 1.8e-9 * lambda_nm^4 / (ID/IG) )
-        For ID/IG = 1.0, lambda = 532 nm:
+        Cancado 2011:  L_D(nm) = sqrt( 1.8e-9 * lambda_nm^4 / (AD/AG) )
+
+        Fix 1.1: L_D now uses ID_IG_area (A_D/A_G), not ID_IG_height.
+        We set area_ratio=1.0 explicitly so that ID_IG_area = 1.0.
+        For AD/AG = 1.0, lambda = 532 nm:
             L_D = sqrt(1.8e-9 * 532**4)
                 = sqrt(1.8e-9 * 7.998e10)
                 ~ 12.0 nm
-        Tolerance: 2 % (matches the Cancado stated +-14 % experimental
-        uncertainty; our numerical check is tighter to catch regressions).
+        Tolerance: 2 % (tighter than the Cancado +-14 % experimental
+        uncertainty to catch numerical regressions).
         """
         expected = math.sqrt(1.8e-9 * 532**4)   # ~12.0 nm
-        peaks = _peaks_DG(id_ig=1.0, i2d_ig=np.nan, fwhm_2d=30.0)
-        # No 2D peak -- keeps I2D/IG = nan
+        # Fix 1.1: set area_ratio=1.0 (what L_D formula reads)
+        # amplitude ratio deliberately differs to confirm area is used
+        peaks = _peaks_DG(id_ig=0.5, area_ratio=1.0, i2d_ig=np.nan, fwhm_2d=30.0)
         peaks_no2D = {"G": peaks["G"], "D": peaks["D"]}
         result = analyze(peaks_no2D, laser_nm=532)
         assert not np.isnan(result.L_D_nm), "L_D should be computed"
-        assert abs(result.L_D_nm - expected) / expected < 0.02
+        assert abs(result.L_D_nm - expected) / expected < 0.02, (
+            "L_D = {:.3f} nm, expected {:.3f} nm (2 % tolerance)".format(
+                result.L_D_nm, expected))
+
+    def test_LD_area_not_height(self):
+        """
+        Regression test for Fix 1.1:
+        If area_ratio != amplitude_ratio, L_D must track area_ratio.
+        Same amplitude ratio (id_ig=0.5) but two different area ratios
+        must yield two different L_D values.
+        """
+        def ld_with_area(area_ratio):
+            peaks = _peaks_DG(id_ig=0.5, area_ratio=area_ratio)
+            p = {"G": peaks["G"], "D": peaks["D"]}
+            return analyze(p, laser_nm=532).L_D_nm
+
+        ld_area03 = ld_with_area(0.3)
+        ld_area09 = ld_with_area(0.9)
+        assert ld_area03 > ld_area09, (
+            "L_D must decrease as A_D/A_G increases (Fix 1.1). "
+            "Got ld(0.3)={:.2f}, ld(0.9)={:.2f}".format(ld_area03, ld_area09))
+
+    def test_ID_IG_area_used_for_LD(self):
+        """
+        Explicit proof-of-fix: L_D must equal the Cancado formula
+        computed with A_D/A_G, not with I_D/I_G height.
+        Amplitude ratio (0.2) and area ratio (0.8) differ by 4x;
+        the expected L_D value distinguishes which was used.
+        """
+        area_ratio  = 0.8
+        height_ratio = 0.2
+        laser_nm    = 532.0
+
+        expected_from_area   = math.sqrt(1.8e-9 * laser_nm**4 / area_ratio)
+        expected_from_height = math.sqrt(1.8e-9 * laser_nm**4 / height_ratio)
+
+        peaks = _peaks_DG(id_ig=height_ratio, area_ratio=area_ratio)
+        p = {"G": peaks["G"], "D": peaks["D"]}
+        result = analyze(p, laser_nm=laser_nm)
+
+        assert abs(result.L_D_nm - expected_from_area) / expected_from_area < 0.01, (
+            "L_D used height ratio instead of area ratio! "
+            "Got {:.3f}, expected_area={:.3f}, expected_height={:.3f}".format(
+                result.L_D_nm, expected_from_area, expected_from_height))
 
     def test_LD_increases_lower_defects(self):
-        """Lower ID/IG (fewer defects) must give larger L_D."""
-        def ld(id_ig):
-            peaks = {"G": _mock_peak("G"), "D": _mock_peak("D", amplitude=id_ig * 100)}
-            return analyze(peaks, laser_nm=532).L_D_nm
+        """
+        Lower A_D/A_G (fewer defects) must give larger L_D.
+        Fix 1.1: use explicit area values.
+        """
+        def ld(area_ratio):
+            g = _mock_peak("G", area=2500.0)
+            d = _mock_peak("D", amplitude=50.0, area=2500.0 * area_ratio)
+            return analyze({"G": g, "D": d}, laser_nm=532).L_D_nm
         assert ld(0.1) > ld(0.5) > ld(1.0)
 
     def test_LD_suppressed_stage2(self):
         """L_D must be NaN in Stage 2 (FWHM_G > 80 cm-1)."""
         peaks = {
-            "G": _mock_peak("G", fwhm=90.0),
-            "D": _mock_peak("D", amplitude=80.0),
+            "G": _mock_peak("G", fwhm=90.0, area=2500.0),
+            "D": _mock_peak("D", amplitude=80.0, area=2000.0),
         }
         result = analyze(peaks, laser_nm=532)
         assert np.isnan(result.L_D_nm)
 
     def test_LD_note_contains_cancado(self):
-        peaks = _peaks_DG(id_ig=0.3)
+        peaks = _peaks_DG(id_ig=0.3, area_ratio=0.3)
         r = analyze(peaks, laser_nm=532)
         assert "Cancado" in r.L_D_note or "Can" in r.L_D_note
+
+    def test_LD_note_mentions_area(self):
+        """Fix 1.1: L_D note must state that area ratio was used."""
+        peaks = _peaks_DG(id_ig=0.3, area_ratio=0.3)
+        r = analyze(peaks, laser_nm=532)
+        assert "area" in r.L_D_note.lower(), (
+            "L_D_note should mention 'area ratio' (Fix 1.1). Got: {}".format(r.L_D_note))
+
+
+# ---------------------------------------------------------------------------
+# B-doping area ratio (Fix 1.1)
+# ---------------------------------------------------------------------------
+
+class TestBoronDopingAreaRatio:
+    """
+    Fix 1.1: _check_boron_doping uses ID_IG_area (>= 3.0 threshold),
+    not ID_IG_height.  These tests verify the boundary.
+    """
+
+    def _boron_peaks(self, height_ratio, area_ratio):
+        """Return peaks satisfying all B-doping criteria except area threshold."""
+        g  = _mock_peak("G", center=1582.0, amplitude=100.0, area=2500.0)
+        d  = _mock_peak("D", center=1350.0,
+                        amplitude=100.0 * height_ratio,
+                        area=2500.0 * area_ratio)
+        dp = _mock_peak("D_prime", center=1620.0, amplitude=14.0, area=196.0)
+        return {"G": g, "D": d, "D_prime": dp}
+
+    def test_boron_flag_set_when_area_above_threshold(self):
+        """
+        G center in [1577, 1587] (set to 1582), ID/ID' = 7.0 (in [5, 9]),
+        A_D/A_G = 4.0 >= 3.0  ->  boron_doping_flag must be True.
+        Height ratio is low (0.5) to confirm area, not height, drives flag.
+        """
+        peaks = self._boron_peaks(height_ratio=0.5, area_ratio=4.0)
+        r = analyze(peaks, laser_nm=532)
+        assert r.boron_doping_flag is True, (
+            "Expected boron flag True when A_D/A_G=4.0 >= 3.0 (Fix 1.1)")
+
+    def test_boron_flag_clear_when_area_below_threshold(self):
+        """
+        A_D/A_G = 2.0 < 3.0  ->  boron_doping_flag must be False,
+        even though height ratio is high (5.0).
+        """
+        peaks = self._boron_peaks(height_ratio=5.0, area_ratio=2.0)
+        r = analyze(peaks, laser_nm=532)
+        assert r.boron_doping_flag is False, (
+            "Expected boron flag False when A_D/A_G=2.0 < 3.0 (Fix 1.1)")
+
+    def test_boron_note_mentions_area_ratio(self):
+        """When flag is set, note must mention 'area ratio'."""
+        peaks = self._boron_peaks(height_ratio=0.5, area_ratio=4.0)
+        r = analyze(peaks, laser_nm=532)
+        if r.boron_doping_flag:
+            assert "area" in r.boron_doping_note.lower(), (
+                "B-doping note should mention area ratio (Fix 1.1). "
+                "Got: {}".format(r.boron_doping_note))
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +343,10 @@ class TestLayerCount:
         -> code correctly reports Monolayer.
         I2D/IG = 0.9 < 1.5  -> Bilayer.
         """
-        # 2.2 > 1.5 -> Monolayer IS correct at 633 nm
         peaks_high = _peaks_DG(i2d_ig=2.2, fwhm_2d=25.0)
         r633_high = analyze(peaks_high, laser_nm=633)
         assert "Monolayer" in r633_high.estimated_layers
 
-        # 0.9 < 1.5 -> should NOT be Monolayer
         peaks_low = _peaks_DG(i2d_ig=0.9, fwhm_2d=25.0)
         r633_low = analyze(peaks_low, laser_nm=633)
         assert "Monolayer" not in r633_low.estimated_layers
@@ -232,12 +371,11 @@ class TestIntegration:
           - L_D is finite and > 0
           - disorder_stage contains 'Stage 1'
         """
-        peaks = _peaks_DG(id_ig=0.3, i2d_ig=2.0, fwhm_2d=30.0, fwhm_g=16.0)
+        peaks = _peaks_DG(id_ig=0.3, i2d_ig=2.0, fwhm_2d=30.0, fwhm_g=16.0,
+                          area_ratio=0.3)
         result = analyze(peaks, laser_nm=532)
 
-        # FWHM(2D)=30 < 35 -> no warning
         assert result.twoD_fwhm_warning is False
-        # 2.0 is NOT > 2.0 (threshold) -> Bilayer
         assert "Bilayer" in result.estimated_layers or "Monolayer" in result.estimated_layers
         assert not np.isnan(result.L_D_nm)
         assert result.L_D_nm > 0
