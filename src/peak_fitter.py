@@ -60,6 +60,12 @@ between oxidised regions in rGO/GO (Lee et al. 2021, Carbon 183, 814).
 I_D*/I_G is a proxy for C/O ratio in rGO; values > 0.15 suggest
 significant residual oxidation.
 
+manual_peak_fwhm (v2.5, public API)
+-------------------------------------
+User-picked peak centre → numerical FWHM without parametric fit.
+See function docstring for full details.  Intended for Jupyter /
+CLI workflows where the researcher selects peaks by cursor.
+
 G-band strategy for doped / disordered graphene:
   1. Detect true G-peak position with find_peaks in 1540–1680 cm⁻¹.
   2. Build an adaptive ±50 cm⁻¹ window centred on the detected peak.
@@ -263,6 +269,95 @@ def compute_fwhm_numerical(x: np.ndarray, y: np.ndarray) -> float:
     return fwhm if fwhm > 0 else np.nan
 
 
+# ══════════════════════════════════════════════════════════
+# PUBLIC API — manual peak FWHM (v2.5)
+# ══════════════════════════════════════════════════════════
+def manual_peak_fwhm(
+    wn:               np.ndarray,
+    intensity:        np.ndarray,
+    peak_center:      float,
+    window_half_width: float = 40.0,
+) -> float:
+    """
+    Compute numerical FWHM for a *user-selected* peak centre.
+
+    This function is designed for workflows where the researcher
+    picks peak positions manually (e.g. from a matplotlib cursor
+    click or a ``ginput()`` call) and wants FWHM *without* running
+    the full parametric fit pipeline.
+
+    Parameters
+    ----------
+    wn : 1-D np.ndarray
+        Wavenumber axis (cm⁻¹).
+    intensity : 1-D np.ndarray
+        Background-corrected intensity (same length as *wn*).
+    peak_center : float
+        User-specified peak position (cm⁻¹), e.g. from a cursor
+        pick in a GUI or a Jupyter ``%matplotlib widget`` cell.
+    window_half_width : float, optional
+        Half-width of the symmetric window around *peak_center*
+        used for FWHM estimation.
+        Default: 40 cm⁻¹  →  window = [center-40, center+40].
+        Tip: increase to 60–80 cm⁻¹ for broad amorphous bands;
+             decrease to 20 cm⁻¹ if adjacent peaks are close.
+
+    Returns
+    -------
+    float
+        Numerical FWHM (cm⁻¹) computed from the data within the
+        window, or ``np.nan`` if:
+        - fewer than 5 data points fall in the window, or
+        - the maximum intensity in the window is ≤ 0, or
+        - no half-maximum crossing is found (e.g. very noisy data).
+
+    Notes
+    -----
+    Algorithm (no parametric fitting):
+      1. Slice the spectrum to ``[peak_center - window_half_width,
+         peak_center + window_half_width]``.
+      2. Find the maximum intensity in the slice.
+      3. Locate the two wavenumbers where the intensity crosses
+         half of the maximum, using linear interpolation between
+         adjacent data points.
+      4. Return the separation of those two crossings as FWHM.
+
+    This is the same algorithm used internally by
+    ``compute_fwhm_numerical``; this function adds the slicing
+    step and the argument-validation guard so callers do not need
+    to pre-slice the spectrum themselves.
+
+    Example (Jupyter)
+    -----------------
+    >>> import numpy as np
+    >>> from src.peak_fitter import manual_peak_fwhm
+    >>> # wn, intensity already loaded
+    >>> g_click = 1587.0   # cm⁻¹ — position from mouse click
+    >>> fwhm = manual_peak_fwhm(wn, intensity, g_click, window_half_width=30)
+    >>> print(f"G FWHM ≈ {fwhm:.1f} cm⁻¹")
+    """
+    if wn.shape != intensity.shape:
+        raise ValueError(
+            f"wn and intensity must have the same shape; "
+            f"got {wn.shape} vs {intensity.shape}"
+        )
+    if window_half_width <= 0:
+        raise ValueError(
+            f"window_half_width must be positive; got {window_half_width}"
+        )
+
+    lo   = peak_center - window_half_width
+    hi   = peak_center + window_half_width
+    mask = (wn >= lo) & (wn <= hi)
+    xd   = wn[mask]
+    yd   = intensity[mask]
+
+    if xd.size < 5 or float(yd.max()) <= 0:
+        return float("nan")
+
+    return float(compute_fwhm_numerical(xd, yd))
+
+
 # ── G-peak locator ────────────────────────────────────────
 def _find_G_peak(wn: np.ndarray, intensity: np.ndarray) -> float:
     mask = (wn >= _G_SEARCH_LO) & (wn <= _G_SEARCH_HI)
@@ -316,9 +411,6 @@ def _fit_peak(wn, intensity, lo, hi, name, use_pseudo_voigt=False):
             gamma_l   = fwhm / 2.0
             area = (eta * amplitude * np.pi * gamma_l
                     + (1.0 - eta) * amplitude * sigma_g * np.sqrt(2 * np.pi))
-            # Feature #3: stderr for pseudo-Voigt
-            # param order: [center, amplitude, fwhm, eta]
-            # center is index 0, fwhm is index 2
             c_std    = _pcov_stderr(pcov, 0)
             fwhm_std = _pcov_stderr(pcov, 2)
         else:
@@ -330,9 +422,6 @@ def _fit_peak(wn, intensity, lo, hi, name, use_pseudo_voigt=False):
             center, amplitude, gamma = popt
             fwhm   = 2.0 * gamma
             area   = np.pi * amplitude * gamma
-            # Feature #3: stderr for Lorentzian
-            # param order: [center, amplitude, gamma]
-            # center=0, gamma=2 → fwhm_std = 2 × gamma_std
             c_std    = _pcov_stderr(pcov, 0)
             g_std    = _pcov_stderr(pcov, 2)
             fwhm_std = (2.0 * g_std) if g_std is not None else None
@@ -393,8 +482,6 @@ def _fit_G_deconvolve(wn, intensity, g_centre_hint):
         if popt[0] <= popt[3]:
             c_g, a_g, gam_g = popt[0], popt[1], popt[2]
             c_d, a_d, gam_d = popt[3], popt[4], popt[5]
-            # Feature #3: param indices in dual-Lorentzian
-            # G: center=0, gamma=2;  D': center=3, gamma=5
             cg_std = _pcov_stderr(pcov, 0)
             gg_std = _pcov_stderr(pcov, 2)
             cd_std = _pcov_stderr(pcov, 3)
@@ -482,8 +569,6 @@ def _fit_D_G_Dp_global(wn: np.ndarray, intensity: np.ndarray,
         cG, aG, gG    = popt[3], popt[4], popt[5]
         cDp, aDp, gDp = popt[6], popt[7], popt[8]
 
-        # Feature #3: triple-Lorentzian param order
-        # D: center=0, gamma=2;  G: center=3, gamma=5;  D': center=6, gamma=8
         cD_std  = _pcov_stderr(pcov, 0)
         gD_std  = _pcov_stderr(pcov, 2)
         cG_std  = _pcov_stderr(pcov, 3)
@@ -684,8 +769,6 @@ def fit_all_peaks(
     results: dict[str, PeakResult] = {}
 
     # ── D* band (v2.4, Feature #1) ────────────────────────
-    # Fitted first so it does not interfere with the D/G/D' global fit.
-    # Window is well-separated (1080–1230 cm⁻¹ at 532 nm).
     dstar_method = _method("D_star")
     if dstar_method == "lmfit":
         results["D_star"] = _fit_single_band_lmfit(
