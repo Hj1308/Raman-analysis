@@ -80,19 +80,26 @@ band_config (optional):
       "asymmetric": False,                              # lmfit only
       "local_bg":   False,                              # lmfit only
     }
+
+Python 3.8 compatibility note
+------------------------------
+All type hints use typing.Dict / typing.List / typing.Tuple / typing.Optional
+instead of the built-in generics (dict[...] / list[...]) which require 3.9+.
 """
+
+from __future__ import annotations
 
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks as _sp_find_peaks
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict, Tuple
 
 # ── Physical constant ─────────────────────────────────────
 _HC_EV_NM = 1239.841984          # eV·nm  (h·c)
 
 # ── Peak search windows (cm⁻¹) at 532 nm ─────────────────
-PEAK_WINDOWS_532 = {
+PEAK_WINDOWS_532: Dict[str, Tuple[float, float]] = {
     "D_star":  (1080, 1230),   # v2.4: C–O / sp² C=C band [Lee 2021]
     "D":       (1270, 1450),
     "G":       (1500, 1650),
@@ -123,11 +130,11 @@ _SNR_THRESHOLD = 3.0     # amplitude / σ_noise
 
 def _laser_energy_ev(laser_nm: float) -> float:
     if laser_nm <= 0:
-        raise ValueError(f"laser_nm must be positive, got {laser_nm}")
+        raise ValueError("laser_nm must be positive, got {}".format(laser_nm))
     return _HC_EV_NM / float(laser_nm)
 
 
-def get_peak_windows(laser_nm: float) -> dict:
+def get_peak_windows(laser_nm: float) -> Dict[str, Tuple[float, float]]:
     """
     Return Raman peak search windows (cm⁻¹) corrected for excitation-energy
     dispersion of the D, D*, and 2D bands.
@@ -141,7 +148,7 @@ def get_peak_windows(laser_nm: float) -> dict:
     e_laser = _laser_energy_ev(laser_nm)
     delta_e = e_laser - e_532          # negative for λ > 532 nm
 
-    windows: dict = {}
+    windows: Dict[str, Tuple[float, float]] = {}
     for peak, (lo, hi) in PEAK_WINDOWS_532.items():
         if peak in ("D", "D_star"):
             shift = _DISP_D_PER_EV * delta_e
@@ -174,7 +181,7 @@ class PeakResult:
     found:           bool             = False
     is_split_2D:     bool             = False
     is_deconvolved:  bool             = False
-    deconv_partner:  "PeakResult | None" = field(default=None, repr=False)
+    deconv_partner:  Optional[object] = field(default=None, repr=False)
     model_x:         np.ndarray       = field(default_factory=lambda: np.array([]))
     model_y:         np.ndarray       = field(default_factory=lambda: np.array([]))
     center_stderr:   Optional[float]  = field(default=None)  # v2.4 Feature #3
@@ -189,8 +196,12 @@ def _noise_sigma(y_obs: np.ndarray, y_fit: np.ndarray) -> float:
 
 
 # ── Detection gate: R² + SNR ─────────────────────────────
-def _is_detected(amplitude: float, y_obs: np.ndarray, y_fit: np.ndarray,
-                 r2: float) -> tuple[bool, float]:
+def _is_detected(
+    amplitude: float,
+    y_obs: np.ndarray,
+    y_fit: np.ndarray,
+    r2: float,
+) -> Tuple[bool, float]:
     """Return (detected, snr). Peak accepted only when R²>0.75 AND SNR>3."""
     if r2 < _R2_THRESHOLD:
         return False, np.nan
@@ -281,11 +292,6 @@ def manual_peak_fwhm(
     """
     Compute numerical FWHM for a *user-selected* peak centre.
 
-    This function is designed for workflows where the researcher
-    picks peak positions manually (e.g. from a matplotlib cursor
-    click or a ``ginput()`` call) and wants FWHM *without* running
-    the full parametric fit pipeline.
-
     Parameters
     ----------
     wn : 1-D np.ndarray
@@ -293,57 +299,24 @@ def manual_peak_fwhm(
     intensity : 1-D np.ndarray
         Background-corrected intensity (same length as *wn*).
     peak_center : float
-        User-specified peak position (cm⁻¹), e.g. from a cursor
-        pick in a GUI or a Jupyter ``%matplotlib widget`` cell.
+        User-specified peak position (cm⁻¹).
     window_half_width : float, optional
-        Half-width of the symmetric window around *peak_center*
-        used for FWHM estimation.
-        Default: 40 cm⁻¹  →  window = [center-40, center+40].
-        Tip: increase to 60–80 cm⁻¹ for broad amorphous bands;
-             decrease to 20 cm⁻¹ if adjacent peaks are close.
+        Half-width of the symmetric window around *peak_center*.
+        Default: 40 cm⁻¹.
 
     Returns
     -------
     float
-        Numerical FWHM (cm⁻¹) computed from the data within the
-        window, or ``np.nan`` if:
-        - fewer than 5 data points fall in the window, or
-        - the maximum intensity in the window is ≤ 0, or
-        - no half-maximum crossing is found (e.g. very noisy data).
-
-    Notes
-    -----
-    Algorithm (no parametric fitting):
-      1. Slice the spectrum to ``[peak_center - window_half_width,
-         peak_center + window_half_width]``.
-      2. Find the maximum intensity in the slice.
-      3. Locate the two wavenumbers where the intensity crosses
-         half of the maximum, using linear interpolation between
-         adjacent data points.
-      4. Return the separation of those two crossings as FWHM.
-
-    This is the same algorithm used internally by
-    ``compute_fwhm_numerical``; this function adds the slicing
-    step and the argument-validation guard so callers do not need
-    to pre-slice the spectrum themselves.
-
-    Example (Jupyter)
-    -----------------
-    >>> import numpy as np
-    >>> from src.peak_fitter import manual_peak_fwhm
-    >>> # wn, intensity already loaded
-    >>> g_click = 1587.0   # cm⁻¹ — position from mouse click
-    >>> fwhm = manual_peak_fwhm(wn, intensity, g_click, window_half_width=30)
-    >>> print(f"G FWHM ≈ {fwhm:.1f} cm⁻¹")
+        Numerical FWHM (cm⁻¹) or ``np.nan`` if insufficient data.
     """
     if wn.shape != intensity.shape:
         raise ValueError(
-            f"wn and intensity must have the same shape; "
-            f"got {wn.shape} vs {intensity.shape}"
+            "wn and intensity must have the same shape; "
+            "got {} vs {}".format(wn.shape, intensity.shape)
         )
     if window_half_width <= 0:
         raise ValueError(
-            f"window_half_width must be positive; got {window_half_width}"
+            "window_half_width must be positive; got {}".format(window_half_width)
         )
 
     lo   = peak_center - window_half_width
@@ -525,8 +498,12 @@ def _fit_G_deconvolve(wn, intensity, g_centre_hint):
 
 
 # ── Global D + G + D′ fitter (fix #3) ────────────────────
-def _fit_D_G_Dp_global(wn: np.ndarray, intensity: np.ndarray,
-                        d_lo: float, d_hi: float) -> dict:
+def _fit_D_G_Dp_global(
+    wn: np.ndarray,
+    intensity: np.ndarray,
+    d_lo: float,
+    d_hi: float,
+) -> Dict[str, PeakResult]:
     """
     Simultaneous three-Lorentzian fit of D, G, and D′ in a single window.
     v2.4: pcov → center_stderr and fwhm_stderr for each sub-peak (Feature #3).
@@ -747,8 +724,8 @@ def fit_all_peaks(
     wn:          np.ndarray,
     intensity:   np.ndarray,
     laser_nm:    float = 532.0,
-    band_config: Optional[dict] = None,
-) -> dict[str, PeakResult]:
+    band_config: Optional[Dict] = None,
+) -> Dict[str, PeakResult]:
     """
     Fit all Raman peaks for graphene / sp² carbon.
 
@@ -766,7 +743,7 @@ def fit_all_peaks(
         m = band_cfg.get(band, {}).get("method", "auto")
         return "auto" if (m == "lmfit" and not use_lmfit) else m
 
-    results: dict[str, PeakResult] = {}
+    results: Dict[str, PeakResult] = {}
 
     # ── D* band (v2.4, Feature #1) ────────────────────────
     dstar_method = _method("D_star")
