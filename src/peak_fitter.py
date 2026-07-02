@@ -7,11 +7,12 @@ Line shapes per Ferrari & Basko (2013):
 
 Dispersion (eV-based, Cançado 2011 / Ferrari & Basko 2013):
   D:  53 cm⁻¹/eV   (double-resonance, zone-boundary phonon)
+  D*: 53 cm⁻¹/eV   (same double-resonance origin as D, Lee 2021)
   2D: 100 cm⁻¹/eV  (double-resonance, 2× D phonon)
   Windows are shifted relative to the 532 nm reference:
     shift = dispersion × (E_laser − E_532)
   where E = hc/λ = 1239.841984 / λ_nm  [eV]
-  Because E decreases with increasing λ, D and 2D windows move to
+  Because E decreases with increasing λ, D, D*, and 2D windows move to
   *lower* wavenumbers at 633 nm / 785 nm — physically correct.
 
 Pseudo-Voigt (D+G band, fix #4)
@@ -42,6 +43,23 @@ where σ_noise is estimated as the MAD (median absolute deviation)
 of the residual y − y_fit in the fit window.  This rejects fits
 that achieve high R² by tracking noise rather than a real peak.
 
+Fitting uncertainty (v2.4, Feature #3)
+----------------------------------------
+curve_fit returns pcov (covariance matrix).  We extract:
+  center_stderr = √pcov[0,0]    (for Lorentzian: param index 0)
+  fwhm_stderr   = √pcov[2,2]×2  (gamma std → FWHM std; ×2 because FWHM=2γ)
+for ALL scipy-fitted peaks (D, G, D_prime, 2D, D*, DG).  These are
+stored in PeakResult.center_stderr / fwhm_stderr.  If pcov contains
+inf (fit not converged / underdetermined), stderr is set to None.
+
+D* band (v2.4, Feature #1)
+----------------------------
+Window 1080–1230 cm⁻¹ at 532 nm (dispersive: 53 cm⁻¹/eV).
+Fitted with a single Lorentzian.  Origin: C–O stretching / sp² C=C
+between oxidised regions in rGO/GO (Lee et al. 2021, Carbon 183, 814).
+I_D*/I_G is a proxy for C/O ratio in rGO; values > 0.15 suggest
+significant residual oxidation.
+
 G-band strategy for doped / disordered graphene:
   1. Detect true G-peak position with find_peaks in 1540–1680 cm⁻¹.
   2. Build an adaptive ±50 cm⁻¹ window centred on the detected peak.
@@ -69,6 +87,7 @@ _HC_EV_NM = 1239.841984          # eV·nm  (h·c)
 
 # ── Peak search windows (cm⁻¹) at 532 nm ─────────────────
 PEAK_WINDOWS_532 = {
+    "D_star":  (1080, 1230),   # v2.4: C–O / sp² C=C band [Lee 2021]
     "D":       (1270, 1450),
     "G":       (1500, 1650),
     "D_prime": (1610, 1680),   # kept for lmfit/legacy; not used in global fit
@@ -79,6 +98,8 @@ PEAK_WINDOWS_532 = {
 # Excitation-energy dispersions (cm⁻¹/eV)
 _DISP_D_PER_EV  = 53.0   # Cançado et al., Nano Lett. 11, 3190 (2011)
 _DISP_2D_PER_EV = 100.0  # Ferrari & Basko, Nat. Nanotechnol. 8, 235 (2013)
+# D* shares the same double-resonance origin as D → same dispersion
+_DISP_DSTAR_PER_EV = 53.0  # Lee et al. (2021) Carbon 183, 814–822
 
 # G search / adaptive window
 _G_SEARCH_LO  = 1540.0
@@ -103,11 +124,12 @@ def _laser_energy_ev(laser_nm: float) -> float:
 def get_peak_windows(laser_nm: float) -> dict:
     """
     Return Raman peak search windows (cm⁻¹) corrected for excitation-energy
-    dispersion of the D and 2D bands.
+    dispersion of the D, D*, and 2D bands.
 
     shift [cm⁻¹] = dispersion [cm⁻¹/eV] × (E_laser − E_532) [eV]
 
     G, D′ and D+G are non-dispersive; their windows are not shifted.
+    D* is dispersive with the same slope as D (53 cm⁻¹/eV) [Lee 2021].
     """
     e_532   = _laser_energy_ev(532.0)
     e_laser = _laser_energy_ev(laser_nm)
@@ -115,7 +137,7 @@ def get_peak_windows(laser_nm: float) -> dict:
 
     windows: dict = {}
     for peak, (lo, hi) in PEAK_WINDOWS_532.items():
-        if peak == "D":
+        if peak in ("D", "D_star"):
             shift = _DISP_D_PER_EV * delta_e
         elif peak == "2D":
             shift = _DISP_2D_PER_EV * delta_e
@@ -149,8 +171,8 @@ class PeakResult:
     deconv_partner:  "PeakResult | None" = field(default=None, repr=False)
     model_x:         np.ndarray       = field(default_factory=lambda: np.array([]))
     model_y:         np.ndarray       = field(default_factory=lambda: np.array([]))
-    center_stderr:   Optional[float]  = field(default=None)
-    fwhm_stderr:     Optional[float]  = field(default=None)
+    center_stderr:   Optional[float]  = field(default=None)  # v2.4 Feature #3
+    fwhm_stderr:     Optional[float]  = field(default=None)  # v2.4 Feature #3
 
 
 # ── Helper: estimate local noise σ ────────────────────────
@@ -170,6 +192,20 @@ def _is_detected(amplitude: float, y_obs: np.ndarray, y_fit: np.ndarray,
     snr   = amplitude / sigma if sigma > 0 else np.nan
     detected = (not np.isnan(snr)) and (snr >= _SNR_THRESHOLD)
     return detected, snr
+
+
+# ── Stderr extractor from pcov (Feature #3) ───────────────
+def _pcov_stderr(pcov: np.ndarray, idx: int) -> Optional[float]:
+    """
+    Extract standard error for parameter at index `idx` from the
+    covariance matrix returned by scipy curve_fit.
+    Returns None if pcov[idx,idx] is inf or negative (underdetermined fit).
+    """
+    try:
+        var = float(pcov[idx, idx])
+        return float(np.sqrt(var)) if (np.isfinite(var) and var >= 0) else None
+    except (IndexError, TypeError):
+        return None
 
 
 # ── Line shapes ───────────────────────────────────────────
@@ -237,7 +273,7 @@ def _find_G_peak(wn: np.ndarray, intensity: np.ndarray) -> float:
         ys,
         height=ys.max() * 0.3,
         distance=3,
-        prominence=ys.max() * 0.05,   # relative prominence (fix)
+        prominence=ys.max() * 0.05,
     )
     if len(pk_idx) == 0:
         return float(xs[np.argmax(ys)])
@@ -247,6 +283,11 @@ def _find_G_peak(wn: np.ndarray, intensity: np.ndarray) -> float:
 
 # ── Single-peak fitter (scipy, Lorentzian) ────────────────
 def _fit_peak(wn, intensity, lo, hi, name, use_pseudo_voigt=False):
+    """
+    Fit a single Raman peak with Lorentzian (or Pseudo-Voigt for D+G).
+    v2.4: pcov from curve_fit → center_stderr and fwhm_stderr stored
+    in PeakResult (Feature #3).
+    """
     mask = (wn >= lo) & (wn <= hi)
     xd   = wn[mask]
     yd   = intensity[mask]
@@ -261,43 +302,54 @@ def _fit_peak(wn, intensity, lo, hi, name, use_pseudo_voigt=False):
 
     try:
         if use_pseudo_voigt:
-            # fix #4: initial fwhm guess = full window / 4; bounds keep fwhm > 0
             fwhm0  = (hi - lo) / 4.0
             p0     = [c0, a0, fwhm0, 0.5]
             bounds = ([lo, 0, 1.0, 0.0], [hi, np.inf, hi - lo, 1.0])
-            popt, _ = curve_fit(_pseudo_voigt, xd, yd, p0=p0,
-                                bounds=bounds, maxfev=5000)
+            popt, pcov = curve_fit(_pseudo_voigt, xd, yd, p0=p0,
+                                   bounds=bounds, maxfev=5000)
             y_fit     = _pseudo_voigt(xd, *popt)
             center    = popt[0]
             amplitude = popt[1]
-            fwhm      = popt[2]           # already the true FWHM
+            fwhm      = popt[2]
             eta       = popt[3]
             sigma_g   = fwhm / 2.3548206
             gamma_l   = fwhm / 2.0
-            # area = η·A·π·γ + (1−η)·A·σ_G·√(2π)   (fix #4)
             area = (eta * amplitude * np.pi * gamma_l
                     + (1.0 - eta) * amplitude * sigma_g * np.sqrt(2 * np.pi))
+            # Feature #3: stderr for pseudo-Voigt
+            # param order: [center, amplitude, fwhm, eta]
+            # center is index 0, fwhm is index 2
+            c_std    = _pcov_stderr(pcov, 0)
+            fwhm_std = _pcov_stderr(pcov, 2)
         else:
             p0     = [c0, a0, g0]
             bounds = ([lo, 0, 0.5], [hi, np.inf, (hi - lo) / 2])
-            popt, _ = curve_fit(_lorentzian, xd, yd, p0=p0,
-                                bounds=bounds, maxfev=5000)
+            popt, pcov = curve_fit(_lorentzian, xd, yd, p0=p0,
+                                   bounds=bounds, maxfev=5000)
             y_fit     = _lorentzian(xd, *popt)
             center, amplitude, gamma = popt
             fwhm   = 2.0 * gamma
             area   = np.pi * amplitude * gamma
+            # Feature #3: stderr for Lorentzian
+            # param order: [center, amplitude, gamma]
+            # center=0, gamma=2 → fwhm_std = 2 × gamma_std
+            c_std    = _pcov_stderr(pcov, 0)
+            g_std    = _pcov_stderr(pcov, 2)
+            fwhm_std = (2.0 * g_std) if g_std is not None else None
 
         r2              = _r2(yd, y_fit)
         detected, snr   = _is_detected(amplitude, yd, y_fit, r2)
 
-        result.center    = center
-        result.amplitude = amplitude
-        result.fwhm      = fwhm
-        result.area      = area
-        result.r_squared = r2
-        result.snr       = snr
-        result.found     = detected
-        result.model_y   = y_fit
+        result.center         = center
+        result.amplitude      = amplitude
+        result.fwhm           = fwhm
+        result.area           = area
+        result.r_squared      = r2
+        result.snr            = snr
+        result.found          = detected
+        result.model_y        = y_fit
+        result.center_stderr  = c_std
+        result.fwhm_stderr    = fwhm_std
 
     except Exception:
         pass
@@ -333,17 +385,27 @@ def _fit_G_deconvolve(wn, intensity, g_centre_hint):
     try:
         p0     = [c_G, a0*0.8, 20.0, c_Dp, a0*0.4, 15.0]
         bounds = ([1480,0,3,1540,0,3],[1660,np.inf,100,1700,np.inf,80])
-        popt, _ = curve_fit(_dual_lorentzian, xd, yd,
-                            p0=p0, bounds=bounds, maxfev=10000)
+        popt, pcov = curve_fit(_dual_lorentzian, xd, yd,
+                                p0=p0, bounds=bounds, maxfev=10000)
         y_fit = _dual_lorentzian(xd, *popt)
         r2    = _r2(yd, y_fit)
 
         if popt[0] <= popt[3]:
             c_g, a_g, gam_g = popt[0], popt[1], popt[2]
             c_d, a_d, gam_d = popt[3], popt[4], popt[5]
+            # Feature #3: param indices in dual-Lorentzian
+            # G: center=0, gamma=2;  D': center=3, gamma=5
+            cg_std = _pcov_stderr(pcov, 0)
+            gg_std = _pcov_stderr(pcov, 2)
+            cd_std = _pcov_stderr(pcov, 3)
+            gd_std = _pcov_stderr(pcov, 5)
         else:
             c_g, a_g, gam_g = popt[3], popt[4], popt[5]
             c_d, a_d, gam_d = popt[0], popt[1], popt[2]
+            cg_std = _pcov_stderr(pcov, 3)
+            gg_std = _pcov_stderr(pcov, 5)
+            cd_std = _pcov_stderr(pcov, 0)
+            gd_std = _pcov_stderr(pcov, 2)
 
         det_g, snr_g = _is_detected(a_g, yd, _lorentzian(xd, c_g, a_g, gam_g), r2)
         det_d, snr_d = _is_detected(a_d, yd, _lorentzian(xd, c_d, a_d, gam_d), r2)
@@ -354,6 +416,8 @@ def _fit_G_deconvolve(wn, intensity, g_centre_hint):
             r_squared=r2, snr=snr_d, found=det_d,
             is_deconvolved=True, model_x=xd,
             model_y=_lorentzian(xd, c_d, a_d, gam_d),
+            center_stderr=cd_std,
+            fwhm_stderr=(2.0*gd_std) if gd_std is not None else None,
         )
         result.center         = c_g
         result.amplitude      = a_g
@@ -365,6 +429,8 @@ def _fit_G_deconvolve(wn, intensity, g_centre_hint):
         result.is_deconvolved = True
         result.deconv_partner = d_prime
         result.model_y        = _lorentzian(xd, c_g, a_g, gam_g)
+        result.center_stderr  = cg_std
+        result.fwhm_stderr    = (2.0*gg_std) if gg_std is not None else None
     except Exception:
         pass
 
@@ -376,13 +442,7 @@ def _fit_D_G_Dp_global(wn: np.ndarray, intensity: np.ndarray,
                         d_lo: float, d_hi: float) -> dict:
     """
     Simultaneous three-Lorentzian fit of D, G, and D′ in a single window.
-
-    This replaces the previous approach of fitting D′ independently over
-    1610–1680 cm⁻¹ (which overlaps the G tail and reliably produced a
-    spurious peak at the G shoulder).
-
-    Returns a dict with keys 'D', 'G', 'D_prime' (PeakResult objects).
-    Falls back to empty results if the global fit fails.
+    v2.4: pcov → center_stderr and fwhm_stderr for each sub-peak (Feature #3).
     """
     lo = max(_DGDp_LO, d_lo - 30)
     hi = _DGDp_HI
@@ -398,7 +458,6 @@ def _fit_D_G_Dp_global(wn: np.ndarray, intensity: np.ndarray,
         return empty
 
     a0  = float(yd.max())
-    # D centre: argmax in D window
     d_mask = (xd >= d_lo) & (xd <= d_hi)
     c_D  = float(xd[d_mask][np.argmax(yd[d_mask])]) if np.any(d_mask) else (d_lo + d_hi) / 2
     c_G  = 1580.0
@@ -412,7 +471,7 @@ def _fit_D_G_Dp_global(wn: np.ndarray, intensity: np.ndarray,
             [d_lo, 0, 3,   1500, 0, 5,  1600, 0, 3],
             [d_hi, np.inf, 80,  1660, np.inf, 80, 1700, np.inf, 60],
         )
-        popt, _ = curve_fit(
+        popt, pcov = curve_fit(
             _triple_lorentzian, xd, yd,
             p0=p0, bounds=bounds, maxfev=15000,
         )
@@ -423,22 +482,33 @@ def _fit_D_G_Dp_global(wn: np.ndarray, intensity: np.ndarray,
         cG, aG, gG    = popt[3], popt[4], popt[5]
         cDp, aDp, gDp = popt[6], popt[7], popt[8]
 
+        # Feature #3: triple-Lorentzian param order
+        # D: center=0, gamma=2;  G: center=3, gamma=5;  D': center=6, gamma=8
+        cD_std  = _pcov_stderr(pcov, 0)
+        gD_std  = _pcov_stderr(pcov, 2)
+        cG_std  = _pcov_stderr(pcov, 3)
+        gG_std  = _pcov_stderr(pcov, 5)
+        cDp_std = _pcov_stderr(pcov, 6)
+        gDp_std = _pcov_stderr(pcov, 8)
+
         det_D,  snr_D  = _is_detected(aD,  yd, _lorentzian(xd, cD,  aD,  gD),  r2)
         det_G,  snr_G  = _is_detected(aG,  yd, _lorentzian(xd, cG,  aG,  gG),  r2)
         det_Dp, snr_Dp = _is_detected(aDp, yd, _lorentzian(xd, cDp, aDp, gDp), r2)
 
-        def _mk(name, c, a, g, det, snr):
+        def _mk(name, c, a, g, det, snr, c_std, g_std):
             return PeakResult(
                 name=name, center=c, amplitude=a,
                 fwhm=2.0*g, area=np.pi*a*g,
                 r_squared=r2, snr=snr, found=det,
                 model_x=xd, model_y=_lorentzian(xd, c, a, g),
+                center_stderr=c_std,
+                fwhm_stderr=(2.0*g_std) if g_std is not None else None,
             )
 
         return {
-            "D":       _mk("D",  cD,  aD,  gD,  det_D,  snr_D),
-            "G":       _mk("G",  cG,  aG,  gG,  det_G,  snr_G),
-            "D_prime": _mk("D'", cDp, aDp, gDp, det_Dp, snr_Dp),
+            "D":       _mk("D",  cD,  aD,  gD,  det_D,  snr_D,  cD_std,  gD_std),
+            "G":       _mk("G",  cG,  aG,  gG,  det_G,  snr_G,  cG_std,  gG_std),
+            "D_prime": _mk("D'", cDp, aDp, gDp, det_Dp, snr_Dp, cDp_std, gDp_std),
         }
 
     except Exception:
@@ -579,7 +649,7 @@ def _fit_single_band_lmfit(wn, intensity, band_name, cfg, windows):
     return PeakResult(
         name=display_name, center=center, amplitude=amplitude,
         fwhm=fwhm,
-        area=float(np.trapezoid(model_y, xd)),   # np.trapz deprecated → np.trapezoid
+        area=float(np.trapezoid(model_y, xd)),
         r_squared=r2, snr=snr, found=det,
         model_x=xd, model_y=model_y,
         center_stderr=float(c_err) if c_err is not None else None,
@@ -597,12 +667,11 @@ def fit_all_peaks(
     """
     Fit all Raman peaks for graphene / sp² carbon.
 
-    Key changes vs previous version:
-    - D, G, D′ are fitted simultaneously (global three-Lorentzian) to
-      prevent the D′ window from capturing the G tail as a spurious peak.
-    - Detection requires R² > 0.75 AND SNR > 3 (was R² > 0.60 only).
-    - Pseudo-Voigt (D+G band) uses consistent FWHM for both components.
-    - np.trapz → np.trapezoid (NumPy 2 compatibility).
+    v2.4 additions:
+    - D* band (1080–1230 cm⁻¹): C–O / sp² C=C proxy for C/O ratio
+      in rGO/GO [Lee et al. 2021, Carbon 183, 814–822].
+    - Fitting uncertainty: center_stderr and fwhm_stderr populated for
+      all scipy-fitted peaks from pcov (Feature #3).
     """
     windows  = get_peak_windows(laser_nm)
     band_cfg = band_config or {}
@@ -613,6 +682,19 @@ def fit_all_peaks(
         return "auto" if (m == "lmfit" and not use_lmfit) else m
 
     results: dict[str, PeakResult] = {}
+
+    # ── D* band (v2.4, Feature #1) ────────────────────────
+    # Fitted first so it does not interfere with the D/G/D' global fit.
+    # Window is well-separated (1080–1230 cm⁻¹ at 532 nm).
+    dstar_method = _method("D_star")
+    if dstar_method == "lmfit":
+        results["D_star"] = _fit_single_band_lmfit(
+            wn, intensity, "D_star", band_cfg["D_star"], windows
+        )
+    else:
+        results["D_star"] = _fit_peak(
+            wn, intensity, *windows["D_star"], "D*"
+        )
 
     # ── D + G + D′  (global fit, fix #3) ─────────────────
     d_method  = _method("D")
@@ -629,7 +711,6 @@ def fit_all_peaks(
         results["D_prime"] = _fit_single_band_lmfit(wn, intensity, "D_prime",
                                                      band_cfg["D_prime"], windows)
 
-    # If any of D/G/D′ are NOT handled by lmfit, use the global fit
     needs_global = not (
         results.get("D") and results.get("G") and results.get("D_prime")
     )
