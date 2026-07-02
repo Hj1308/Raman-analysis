@@ -3,13 +3,16 @@ Baseline correction methods for Raman spectra.
 
 Methods
 ───────
-  als_baseline   : Asymmetric Least Squares (Eilers & Boelens 2005)
-                   Good for broad, slowly varying backgrounds.
-  arPLS_baseline : Asymmetrically Reweighted Penalised Least Squares
-                   (Baek et al. 2015, Analyst 140, 250).
-                   Superior for fluorescence-heavy spectra (GO, g-C3N4):
-                   automatically down-weights positive residuals (peaks)
-                   so the baseline hugs the true background more tightly.
+  als_baseline      : Asymmetric Least Squares (Eilers & Boelens 2005)
+                      Good for broad, slowly varying backgrounds.
+  arPLS_baseline    : Asymmetrically Reweighted Penalised Least Squares
+                      (Baek et al. 2015, Analyst 140, 250).
+                      Superior for fluorescence-heavy spectra (GO, g-C3N4):
+                      automatically down-weights positive residuals (peaks)
+                      so the baseline hugs the true background more tightly.
+  auto_baseline     : Dispatcher — selects als or arPLS by name.
+  correct_baseline  : Public alias for auto_baseline (used by streamlit_app
+                      and external callers).
 
 Change log
 ──────────
@@ -20,6 +23,8 @@ Change log
          compatible with scipy >= 1.11 (diags_array API change).
   v2.5.2 Fix: corrected D2 orientation so H = lam * D2.T @ D2 is (n x n),
          resolving 'inconsistent shapes' error in Z = W + H.
+  v2.5.3 Fix: added correct_baseline alias → resolves ImportError in
+         streamlit_app.py (line 40) on Streamlit Cloud.
 """
 
 import numpy as np
@@ -166,7 +171,15 @@ def auto_baseline(
         corrected, _ = arPLS_baseline(y, **kwargs)
     else:
         raise ValueError(
-            f"Unknown baseline method: {method!r}. "
-            "Choose 'als' or 'arPLS'."
+            "Unknown baseline method: {!r}. "
+            "Choose 'als' or 'arPLS'.".format(method)
         )
     return corrected
+
+
+# -------------------------------------------------------------
+# Public alias — keeps streamlit_app.py and any external code
+# that does `from src.baseline import correct_baseline` working.
+# correct_baseline(y, method='als'|'arPLS', **kwargs) -> corrected array
+# -------------------------------------------------------------
+correct_baseline = auto_baseline
