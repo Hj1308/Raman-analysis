@@ -5,9 +5,14 @@ Line shapes per Ferrari & Basko (2013):
   D+G           -> Pseudo-Voigt
   2D bilayer    -> dual-Lorentzian if single R² < 0.90
 
-Dispersion at 532 nm:
-  D:  0.174 cm⁻¹/nm
-  2D: 0.348 cm⁻¹/nm
+Dispersion (eV-based, Cançado 2011 / Ferrari & Basko 2013):
+  D:  53 cm⁻¹/eV   (double-resonance, zone-boundary phonon)
+  2D: 100 cm⁻¹/eV  (double-resonance, 2× D phonon)
+  Windows are shifted relative to the 532 nm reference:
+    shift = dispersion × (E_laser − E_532)
+  where E = hc/λ = 1239.841984 / λ_nm  [eV]
+  Because E decreases with increasing λ, D and 2D windows move to
+  *lower* wavenumbers at 633 nm / 785 nm — physically correct.
 
 G-band strategy for doped / disordered graphene:
   1. Detect true G-peak position with find_peaks in a broad search window (1540–1680 cm⁻¹).
@@ -33,6 +38,9 @@ from scipy.signal import find_peaks as _sp_find_peaks
 from dataclasses import dataclass, field
 from typing import Optional
 
+# ── Physical constant ─────────────────────────────────────
+_HC_EV_NM = 1239.841984          # eV·nm  (h·c)
+
 # ── Peak search windows (cm⁻¹) at 532 nm ─────────────────
 PEAK_WINDOWS_532 = {
     "D":       (1270, 1450),
@@ -42,23 +50,62 @@ PEAK_WINDOWS_532 = {
     "DG":      (2850, 2960),
 }
 
+# Excitation-energy dispersions (cm⁻¹/eV)
+# D  : ~53 cm⁻¹/eV  — Cançado et al., Nano Lett. 11, 3190 (2011)
+# 2D : ~100 cm⁻¹/eV — Ferrari & Basko, Nat. Nanotechnol. 8, 235 (2013)
+_DISP_D_PER_EV  = 53.0
+_DISP_2D_PER_EV = 100.0
+
 # Broad window used to *locate* the G peak before building adaptive window
 _G_SEARCH_LO  = 1540.0
 _G_SEARCH_HI  = 1680.0
 _G_HALF_WIDTH = 50.0   # cm⁻¹ each side of detected centre
 
-_DISP_D_PER_NM  = 0.174
-_DISP_2D_PER_NM = 0.348
+
+def _laser_energy_ev(laser_nm: float) -> float:
+    """Convert laser wavelength (nm) to photon energy (eV)."""
+    if laser_nm <= 0:
+        raise ValueError(f"laser_nm must be positive, got {laser_nm}")
+    return _HC_EV_NM / float(laser_nm)
 
 
 def get_peak_windows(laser_nm: float) -> dict:
-    delta_nm = laser_nm - 532.0
-    windows  = {}
+    """
+    Return Raman peak search windows (cm⁻¹) corrected for excitation-energy
+    dispersion of the D and 2D bands.
+
+    Reference windows are defined at 532 nm.  For dispersive bands the shift is:
+
+        shift [cm⁻¹] = dispersion [cm⁻¹/eV] × (E_laser − E_532) [eV]
+
+    Because E_laser decreases as λ increases, D and 2D windows move to
+    *lower* wavenumbers for 633 nm and 785 nm excitation — consistent with
+    experimental observations (Cançado 2011, Ferrari & Basko 2013).
+
+    G, D' and D+G are non-dispersive (intervalley/zone-centre phonons) and
+    their windows are not shifted.
+
+    Parameters
+    ----------
+    laser_nm : float
+        Laser excitation wavelength in nm.
+
+    Returns
+    -------
+    dict[str, tuple[float, float]]
+        Keys: 'D', 'G', 'D_prime', '2D', 'DG'
+        Values: (low_wavenumber, high_wavenumber) in cm⁻¹
+    """
+    e_532   = _laser_energy_ev(532.0)
+    e_laser = _laser_energy_ev(laser_nm)
+    delta_e = e_laser - e_532          # negative for λ > 532 nm
+
+    windows: dict = {}
     for peak, (lo, hi) in PEAK_WINDOWS_532.items():
         if peak == "D":
-            shift = _DISP_D_PER_NM * delta_nm
+            shift = _DISP_D_PER_EV * delta_e
         elif peak == "2D":
-            shift = _DISP_2D_PER_NM * delta_nm
+            shift = _DISP_2D_PER_EV * delta_e
         else:
             shift = 0.0
         windows[peak] = (lo + shift, hi + shift)
@@ -415,7 +462,6 @@ def _fit_single_band_lmfit(
 
     # ── Build model ────────────────────────────────────
     if asym:
-        # Custom asymmetric Lorentzian
         def _asym_lor(x, center, sigma_l, sigma_r, amplitude):
             sig = np.where(x < center, sigma_l, sigma_r)
             return amplitude * (sig ** 2 / ((x - center) ** 2 + sig ** 2))
@@ -440,13 +486,11 @@ def _fit_single_band_lmfit(
         params = peak_model.make_params(
             center    = dict(value=c0, min=lo, max=hi),
             sigma     = dict(value=w0, min=1.0, max=(hi-lo)/2),
-            amplitude = dict(value=a0 * w0, min=0),   # lmfit amplitude = area-like for Lorentzian
+            amplitude = dict(value=a0 * w0, min=0),
         )
         if model_type == "Voigt":
-            # gamma is Lorentzian HWHM (cm⁻¹), not a fraction
             params["peak_gamma"].set(value=w0 * 0.5, min=0.5, max=(hi-lo)/2, vary=True)
 
-    # ── Optional linear background (use sparingly after ALS) ──
     full_model = peak_model
     if use_bg:
         lin = LinearModel(prefix="lin_")
@@ -456,7 +500,6 @@ def _fit_single_band_lmfit(
         ))
         full_model = peak_model + lin
 
-    # ── Fit ────────────────────────────────────────────
     try:
         result = full_model.fit(yd, params, x=xd)
     except Exception:
@@ -465,7 +508,6 @@ def _fit_single_band_lmfit(
     if not result.success and result.rsquared < 0.40:
         return empty
 
-    # ── Extract PeakResult ─────────────────────────────
     model_y = result.eval(x=xd)
     r2      = float(result.rsquared)
 
@@ -474,27 +516,25 @@ def _fit_single_band_lmfit(
         amplitude = float(result.params["peak_amplitude"].value)
         fwhm      = compute_fwhm_numerical(xd, model_y)
         c_err     = result.params["peak_center"].stderr
-        fwhm_err  = None   # no closed form for asymmetric
+        fwhm_err  = None
     else:
         center    = float(result.params["peak_center"].value)
         fwhm      = compute_fwhm_numerical(xd, model_y)
         c_err     = result.params["peak_center"].stderr
         sig_err   = result.params["peak_sigma"].stderr
         fwhm_err  = (2.0 * sig_err) if sig_err is not None else None
-        # recover peak height from lmfit amplitude definition
         if model_type == "Lorentzian":
             gamma_v   = float(result.params["peak_sigma"].value)
             amplitude = float(result.params["peak_amplitude"].value) / (np.pi * max(gamma_v, 1e-9))
         elif model_type == "Gaussian":
             sigma_v   = float(result.params["peak_sigma"].value)
             amplitude = float(result.params["peak_amplitude"].value) / (sigma_v * np.sqrt(2 * np.pi))
-        else:  # Voigt — use max of evaluated profile
+        else:
             amplitude = float(np.max(model_y))
 
-    # scientific note for Gaussian G band
     display_name = band_name
     if band_name == "G" and model_type == "Gaussian":
-        display_name = "G[Gauss!]"   # visible warning in report table
+        display_name = "G[Gauss!]"
 
     peak = PeakResult(
         name          = display_name,
@@ -534,7 +574,7 @@ def fit_all_peaks(
 
         Example (only override what you need):
           band_config = {
-              "G": {"method": "adaptive"},      # explicit adaptive (same as default)
+              "G": {"method": "adaptive"},
               "D": {"method": "lmfit",
                     "model": "Lorentzian",
                     "asymmetric": True,
@@ -563,12 +603,11 @@ def fit_all_peaks(
     use_lmfit = _lmfit_available()
     results: dict[str, PeakResult] = {}
 
-    # ── Helper: resolve method for a band ──────────────
     def _method(band: str) -> str:
         cfg = band_cfg.get(band, {})
         m   = cfg.get("method", "auto")
         if m == "lmfit" and not use_lmfit:
-            m = "auto"   # graceful fallback
+            m = "auto"
         return m
 
     # ── D band ─────────────────────────────────────────
@@ -590,7 +629,6 @@ def fit_all_peaks(
         g_result = _fit_G_deconvolve(wn, intensity, g_centre)
         results["G"] = g_result
     else:
-        # "auto" or "adaptive" — original proven logic
         g_result = _fit_G_adaptive(wn, intensity)
         results["G"] = g_result
 
@@ -601,7 +639,6 @@ def fit_all_peaks(
     if dp_method == "lmfit":
         lmfit_dp = _fit_single_band_lmfit(wn, intensity, "D_prime",
                                            band_cfg["D_prime"], windows)
-        # use lmfit result if better than standalone scipy
         if lmfit_dp.found and (not standalone_dp.found or
                                 lmfit_dp.r_squared >= standalone_dp.r_squared):
             results["D_prime"] = lmfit_dp
