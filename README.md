@@ -8,15 +8,19 @@ A Python application for quantitative analysis of Raman spectra of **graphene an
 
 ## Features
 
-- **Baseline correction** — Asymmetric Least Squares (ALS) algorithm
-- **Peak fitting** — Lorentzian (D, G, D′) and Pseudo-Voigt (D+G) using pure `scipy` (no `lmfit` required)
-- **Adaptive G-band fitting** — automatically locates the true G peak position before fitting; handles doped samples where G sits near or above 1600 cm⁻¹
+- **Baseline correction** — Asymmetric Least Squares (ALS); negative residuals preserved (no clipping)
+- **Peak fitting** — Lorentzian (D, G, D′) and Pseudo-Voigt (D+G) using pure `scipy`; optional `lmfit` backend via `band_config`
+- **Global D / G / D′ fit** — D, G, and D′ are fitted simultaneously to prevent D′ from capturing the G tail
+- **Adaptive G-band fitting** — locates the true G peak position before fitting; handles doped samples where G sits near or above 1600 cm⁻¹
 - **G+D′ deconvolution** — dual-Lorentzian separation of overlapping G and D′ bands in disordered or doped graphene
+- **SNR-gated peak detection** — a peak is accepted only when R² > 0.75 **and** SNR > 3 (SNR = amplitude / MAD-based noise estimate)
+- **Pseudo-Voigt area correction** — FWHM and integrated area follow the Thompson–Cox–Hastings definition
 - **Quantitative analysis** — I_D/I_G, I_2D/I_G, I_D′/I_G, I_D/I_D′ ratios
-- **Defect characterization** — defect inter-distance L_D, disorder stage, defect type classification
-- **Layer number estimation** — from I_2D/I_G ratio
+- **Defect characterisation** — L_D (Cançado 2011, E_L⁴-corrected), disorder stage, defect type classification
+- **Layer number estimation** — from I_2D/I_G with FWHM(2D) reliability guard
+- **eV-based laser dispersion** — peak windows shift with laser energy per Cançado 2011
 - **Publication-quality plots** — 4 plots per spectrum (300 dpi)
-- **Batch processing** — analyze entire folders at once
+- **Batch processing** — analyse entire folders at once
 - **CSV + text reports** — structured output for all parameters
 
 ## Peak Windows (532 nm laser)
@@ -25,13 +29,15 @@ A Python application for quantitative analysis of Raman spectra of **graphene an
 |------|---------------------|------------|------------|-----------------|
 | D    | 1270–1450 | fixed | Lorentzian | Breathing mode, requires defect |
 | G    | 1540–1680 (search) | adaptive ±50 cm⁻¹ around detected peak | Lorentzian | E₂g phonon, all sp² carbon |
-| D′   | 1610–1680 (standalone) or deconvolved from G+D′ fit | Lorentzian | Intravalley defect-induced |
+| D′   | global fit with D+G or standalone 1610–1680 | Lorentzian | Intravalley defect-induced |
 | 2D   | 2580–2780 | fixed | Lorentzian (or dual) | Second order of D, always active |
 | D+G  | 2850–2960 | fixed | Pseudo-Voigt | Combination band |
 
-> **G-band strategy for doped / disordered samples:** the fitter first locates the true G peak via `find_peaks` in 1540–1680 cm⁻¹, then builds a ±50 cm⁻¹ adaptive window. If the single-Lorentzian R² < 0.60 (e.g. overlapping G+D′ in heavily doped or disordered materials), a dual-Lorentzian deconvolution is performed automatically. The D′ component from deconvolution is stored in `PeakResult.deconv_partner` and promoted to the `D_prime` result slot if it outperforms the standalone fit.
+> **G-band strategy for doped / disordered samples:** the fitter first locates the true G peak via `find_peaks` in 1540–1680 cm⁻¹ (prominence threshold = 5 % of spectrum maximum), then builds a ±50 cm⁻¹ adaptive window. If the single-Lorentzian R² < 0.60 (e.g. overlapping G+D′ in heavily doped or disordered materials), a dual-Lorentzian deconvolution is performed automatically. The D′ component from deconvolution is stored in `PeakResult.deconv_partner` and promoted to the `D_prime` result slot if it outperforms the standalone fit.
 
-> Peak positions shift with laser wavelength (dispersive peaks: D shifts ~53 cm⁻¹/eV, 2D shifts ~106 cm⁻¹/eV).
+> **Global D / G / D′ fit:** by default D, G, and D′ are optimised in a single least-squares call (`_fit_D_G_Dp_global`). This prevents spurious D′ detections caused by fitting D′ in isolation against the G tail.
+
+> Peak positions shift with laser wavelength. Dispersive peaks: D ~53 cm⁻¹/eV, 2D ~106 cm⁻¹/eV (Cançado 2011, eV-based).
 
 ## Installation
 
@@ -42,7 +48,7 @@ pip install -r requirements.txt
 ```
 
 **Dependencies:** `numpy`, `scipy`, `matplotlib`, `pandas`, `openpyxl`  
-(no `lmfit` required — all fitting uses pure `scipy`)
+`lmfit` is optional — install it only if you use advanced `band_config` options (Voigt, AsymLorentzian, uncertainty reporting).
 
 ## Usage
 
@@ -53,9 +59,27 @@ python main.py --file spectrum.txt --laser 532
 # Single file with custom output directory
 python main.py --file spectrum.txt --laser 633 --output ./my_results/
 
-# Batch mode — analyze all .txt/.csv files in a folder
+# Batch mode — analyse all .txt/.csv/.xlsx files in a folder
 python main.py --folder ./spectra/ --laser 785 --batch
 ```
+
+### Advanced: `band_config`
+
+Pass a `band_config` dict to `fit_all_peaks()` to override the default fit strategy per band:
+
+```python
+from src.peak_fitter import PeakFitter
+
+config = {
+    "G": {"method": "adaptive"},          # default adaptive window
+    "D": {"lineshape": "Lorentzian"},      # explicit lineshape
+    "2D": {"method": "deconvolve"},        # force dual-Lorentzian
+    "D+G": {"lineshape": "Voigt"},         # requires lmfit
+}
+results = fitter.fit_all_peaks(band_config=config)
+```
+
+If `lmfit` is not installed, Voigt / AsymLorentzian options fall back silently to Lorentzian and a warning is stored in `PeakResult.name`.
 
 ## Input File Format
 
@@ -71,7 +95,7 @@ Excel (`.xlsx`) files are also supported: wavenumber in column B, intensity in c
 
 ## Output
 
-For each spectrum, the analyzer generates:
+For each spectrum, the analyser generates:
 - `*_baseline.png` — raw spectrum + ALS baseline overlay
 - `*_peaks.png` — fitted peaks on corrected spectrum
 - `*_individual.png` — individual peak fits with residuals
@@ -88,12 +112,15 @@ Each fitted peak is returned as a `PeakResult` dataclass:
 | `center` | float | Peak position (cm⁻¹) |
 | `amplitude` | float | Peak height (a.u.) |
 | `fwhm` | float | Full width at half maximum (cm⁻¹) |
-| `area` | float | Integrated area |
+| `area` | float | Integrated area (Thompson–Cox–Hastings for Pseudo-Voigt) |
 | `r_squared` | float | Goodness of fit |
-| `found` | bool | True if R² > 0.60 |
+| `found` | bool | True if R² > 0.75 and SNR > 3 |
 | `is_deconvolved` | bool | True when G was separated from D′ by dual-Lorentzian |
-| `deconv_partner` | PeakResult | D′ component extracted during G deconvolution |
+| `deconv_partner` | PeakResult \| None | D′ component extracted during G deconvolution |
 | `is_split_2D` | bool | True when 2D was fitted with dual-Lorentzian (bilayer) |
+| `twoD_fwhm_warning` | bool | True when FWHM(2D) > 35 cm⁻¹ (layer count unreliable) |
+| `center_stderr` | float \| None | Standard error on center (lmfit backend only) |
+| `fwhm_stderr` | float \| None | Standard error on FWHM (lmfit backend only) |
 
 ## Known Limitations
 
@@ -104,13 +131,13 @@ The current implementation uses a **single Lorentzian** for the 2D band. In few-
 > Reference: Ferrari et al. (2006) *Phys. Rev. Lett.* **97**, 187401
 
 ### Laser Wavelength Dependence of L_D
-The L_D (defect inter-distance) formula currently uses a simplified form. The full laser-energy-dependent formula from Cançado et al. (2011) is:
+L_D is calculated using the Cançado 2011 formula with full E_L⁴ dependence:
 
 ```
 L_D² (nm²) ≈ (4.3 × 10³ / E_L⁴) × (I_D / I_G)⁻¹
 ```
 
-where E_L is the laser energy in eV. This E_L⁴ dependence becomes significant when comparing measurements across different excitation wavelengths (e.g. 532 nm vs 633 nm vs 785 nm).
+where E_L is the laser energy in eV. This formula is valid in **Stage 1 only** (low-defect regime, L_D ≳ 10 nm). When the sample is classified as Stage 2, L_D is set to `NaN` and a warning is stored in `L_D_note`.
 > Reference: Cançado et al. *Nano Lett.* **11**, 3190–3196 (2011)
 
 ### Disorder Stage Boundary
@@ -118,7 +145,7 @@ The current Stage 1 / Stage 2 boundary is based on I_D/I_G threshold. A more acc
 > Reference: Cançado et al. *Carbon* reviews; Eckmann et al. *Nano Lett.* **12**, 3925 (2012)
 
 ### Layer Number Accuracy
-Layer estimation from I_2D/I_G is reliable for 1–3 layers. For >5 layers the I_2D/I_G ratio saturates and accuracy decreases significantly. Complementary methods (optical contrast, Si substrate peak ratio) are recommended for thicker samples.
+Layer estimation from I_2D/I_G is reliable for 1–3 layers and only when FWHM(2D) ≤ 35 cm⁻¹. When FWHM(2D) > 35 cm⁻¹ (multilayer, doped, or substrate-coupled graphene), the `twoD_fwhm_warning` flag is set and the estimated layer count should be treated with caution. For > 5 layers the ratio saturates. Complementary methods (optical contrast, Si substrate peak ratio) are recommended for thicker samples.
 > Reference: Ferrari & Basko *Nature Nanotechnology* **8**, 235 (2013)
 
 ### G+D′ Overlap in GO/rGO
@@ -130,9 +157,8 @@ In graphene oxide (GO) and reduced GO, the G and D′ bands often overlap severe
 Planned improvements for future releases:
 
 - [ ] **Multi-Lorentzian 2D fitting** — 4-component decomposition for bilayer/trilayer graphene
-- [ ] **Laser-energy-dependent L_D** — full Cançado 2011 formula with E_L⁴ correction
-- [ ] **Fitting uncertainty** — error bars on all peak parameters from covariance matrix
-- [ ] **Intensity normalization** — option to normalize to G peak amplitude or area
+- [ ] **Fitting uncertainty (scipy)** — error bars from covariance matrix for all users (no lmfit required)
+- [ ] **Intensity normalisation** — option to normalise to G peak amplitude or area
 - [ ] **Advanced baseline** — arPLS (asymmetrically reweighted PLS) for noisy/complex spectra
 - [ ] **Doping/strain flags** — detect anomalous G and 2D positions indicating charge doping or strain
 - [ ] **Batch statistics** — mean ± std across all samples for batch runs
@@ -160,10 +186,11 @@ H.J (2026). *Raman Spectrum Analyzer: Quantitative Analysis of Graphene Raman Sp
 
 - Ferrari & Robertson (2001) *Phys. Rev. B* **64**, 075414 — disorder stage classification
 - Lucchese et al. (2010) *Carbon* **48**, 1592 — L_D formula from I_D/I_G
-- Cançado et al. (2011) *Nano Lett.* **11**, 3190 — laser-energy-dependent L_D and defect density
+- Cançado et al. (2011) *Nano Lett.* **11**, 3190 — laser-energy-dependent L_D, eV-based peak dispersion
 - Ferrari & Basko (2013) *Nature Nanotechnology* **8**, 235 — peak conventions & line shapes
 - Eckmann et al. (2012) *Nano Lett.* **12**, 3925 — defect type from I_D/I_D′
 - Claramunt et al. (2015) *Sci. Rep.* **5**, 19491 — G+D′ overlap in GO/rGO
+- Thompson, Cox & Hastings (1987) *J. Appl. Crystallogr.* **20**, 79 — pseudo-Voigt profile definition
 
 ## Project Structure
 
@@ -179,20 +206,31 @@ Raman-analysis/
 └── src/
     ├── __init__.py
     ├── loader.py            ← file reading & preprocessing (txt, csv, xlsx)
-    ├── baseline.py          ← ALS baseline correction
-    ├── peak_fitter.py       ← adaptive Lorentzian/Pseudo-Voigt fitting + G+D′ deconvolution
-    ├── analyzer.py          ← ratio calculations & defect analysis
-    ├── plotter.py           ← matplotlib visualization (300 dpi)
+    ├── baseline.py          ← ALS baseline correction (no clipping of residuals)
+    ├── peak_fitter.py       ← global D/G/D′ fit, adaptive G, G+D′ deconvolution, SNR gate
+    ├── analyzer.py          ← ratio calculations & defect analysis (L_D E_L⁴-corrected)
+    ├── plotter.py           ← matplotlib visualisation (300 dpi)
     └── exporter.py          ← CSV + text report export
 ```
 
 ## Changelog
 
-### Latest — Adaptive G-band & Deconvolution
-- `peak_fitter.py`: G-band window is now **adaptive** — the fitter detects the true G peak location in 1540–1680 cm⁻¹ before fitting, resolving failures on N-doped / B-doped and disordered graphene where G sits near 1600 cm⁻¹
-- Added `_fit_G_deconvolve()`: automatic **dual-Lorentzian G+D′ deconvolution** when single-peak R² < 0.60
-- `PeakResult` extended with `is_deconvolved` and `deconv_partner` fields
-- Removed `lmfit` dependency; all fitting uses pure `scipy.optimize.curve_fit`
+### v2.3 — 2026-07-02
+- **Global D / G / D′ fit** (`_fit_D_G_Dp_global`): three bands fitted simultaneously, eliminating spurious D′ detections on the G tail (#3)
+- **SNR gate**: peak detection now requires R² > 0.75 **and** SNR > 3; SNR computed from MAD-based residual noise (#11)
+- **Pseudo-Voigt corrected**: FWHM and integrated area follow the Thompson–Cox–Hastings definition (#4)
+- **L_D implementation**: uses full Cançado 2011 formula with E_L⁴; Stage 2 samples return `NaN` with warning (#2)
+- **FWHM(2D) guard**: `twoD_fwhm_warning` flag set when FWHM(2D) > 35 cm⁻¹; layer count marked unreliable (#5)
+- **Removed `graphitization_pct`**: field deleted — (1−I_D/I_G)×100 has no literature basis and is non-monotonic across Stage 1/2 (#6)
+- **Baseline clipping removed**: `np.clip` after ALS subtraction deleted; negative residuals (over-subtraction artefacts) are now preserved (#10)
+- **Relative prominence threshold**: `find_peaks` prominence = 5 % of spectrum maximum, fixing false negatives in low-background spectra (#11)
+- **eV-based peak dispersion**: `get_peak_windows` uses eV-based shifts per Cançado 2011 (replaces nm-based approximation)
+- **`band_config` + optional `lmfit` backend**: per-band lineshape/method overrides; `center_stderr` / `fwhm_stderr` when lmfit present
+
+### v2.2 — 2026-07-01
+- Adaptive G-band window + dual-Lorentzian G+D′ deconvolution
+- `PeakResult` extended with `is_deconvolved`, `deconv_partner`, `is_split_2D`
+- Removed `lmfit` as a hard dependency
 
 ## Author
 
