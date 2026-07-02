@@ -7,7 +7,7 @@ Methods
                    Good for broad, slowly varying backgrounds.
   arPLS_baseline : Asymmetrically Reweighted Penalised Least Squares
                    (Baek et al. 2015, Analyst 140, 250).
-                   Superior for fluorescence-heavy spectra (GO, g-C₃N₄):
+                   Superior for fluorescence-heavy spectra (GO, g-C3N4):
                    automatically down-weights positive residuals (peaks)
                    so the baseline hugs the true background more tightly.
 
@@ -18,31 +18,47 @@ Change log
          auto_baseline() dispatcher added
   v2.5.1 Fix: replaced legacy diags() call with np.diff(np.eye(n), 2)
          compatible with scipy >= 1.11 (diags_array API change).
+  v2.5.2 Fix: corrected D2 orientation so H = lam * D2.T @ D2 is (n x n),
+         resolving 'inconsistent shapes' error in Z = W + H.
 """
 
 import numpy as np
-from scipy.sparse import csc_matrix, diags, eye as speye
+from scipy.sparse import csc_matrix, diags
 from scipy.sparse.linalg import spsolve
 
 
-# ─────────────────────────────────────────────────────────
-# ALS baseline (original — fixed for scipy >= 1.11)
-# ─────────────────────────────────────────────────────────
+def _second_diff_matrix(n: int):
+    """
+    Return sparse second-difference matrix D2 with shape (n-2, n),
+    so that D2.T.dot(D2) has shape (n, n) and can be added to
+    the diagonal weight matrix W (also n x n).
+
+    np.diff(np.eye(n), 2) produces shape (n, n-2) — that is the
+    forward-difference convention.  We need D in (n-2, n) form, so
+    we take the transpose.
+    """
+    # diff result: shape (n, n-2)  -> transpose -> (n-2, n)
+    return csc_matrix(np.diff(np.eye(n), 2).T)
+
+
+# -------------------------------------------------------------
+# ALS baseline
+# -------------------------------------------------------------
 def als_baseline(
     y: np.ndarray,
     lam: float = 1e5,
     p: float   = 0.01,
     niter: int = 10,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple:
     """
     Asymmetric Least Squares baseline.
 
     Parameters
     ----------
     y     : intensity array (1-D)
-    lam   : smoothness penalty (10³–10⁷ typical)
-    p     : asymmetry weight (0.001–0.1; smaller = baseline hugs minima)
-    niter : number of IRLS iterations (10 is usually sufficient)
+    lam   : smoothness penalty (1e3-1e7 typical)
+    p     : asymmetry weight (0.001-0.1; smaller -> baseline hugs minima)
+    niter : number of IRLS iterations
 
     Returns
     -------
@@ -51,68 +67,54 @@ def als_baseline(
     Reference
     ---------
     Eilers & Boelens (2005) Baseline Correction with Asymmetric
-    Least Squares Smoothing. Unpublished manuscript.
+    Least Squares Smoothing.
     """
-    y = np.asarray(y, dtype=float)
-    n = len(y)
-    # Second-difference matrix — works with all scipy versions
-    D2 = csc_matrix(np.diff(np.eye(n), 2).T)
-    H  = lam * D2.dot(D2.T)
+    y  = np.asarray(y, dtype=float)
+    n  = len(y)
+    D2 = _second_diff_matrix(n)       # shape (n-2, n)
+    H  = lam * D2.T.dot(D2)           # shape (n, n)  <-- correct
     w  = np.ones(n)
     z  = y.copy()
     for _ in range(niter):
-        W = diags(w, 0, format="csc")
-        Z = W + H
+        W = diags(w, 0, format="csc")  # shape (n, n)
+        Z = W + H                      # both (n, n) -> no shape error
         z = spsolve(Z, w * y)
         w = p * (y > z) + (1 - p) * (y <= z)
     return y - z, z
 
 
-# ─────────────────────────────────────────────────────────
-# arPLS baseline  (v2.5, Feature #7)
-# ─────────────────────────────────────────────────────────
+# -------------------------------------------------------------
+# arPLS baseline
+# -------------------------------------------------------------
 def arPLS_baseline(
     y: np.ndarray,
     lam: float   = 1e5,
     ratio: float = 1e-6,
     niter: int   = 100,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple:
     """
     Asymmetrically Reweighted Penalised Least Squares baseline.
-
-    Compared to ALS, arPLS:
-      • Uses a sigmoid-like weight update instead of a hard threshold.
-      • Automatically down-weights spectral regions where the signal
-        is above the estimated baseline (i.e., peaks).
-      • Converges more robustly for fluorescence-heavy spectra.
 
     Parameters
     ----------
     y     : intensity array (1-D, raw input)
-    lam   : smoothness penalty (1e4–1e7; larger = smoother baseline)
-    ratio : convergence criterion; stop when change < ratio × ||z||₂
+    lam   : smoothness penalty (1e4-1e7)
+    ratio : convergence criterion
     niter : maximum iterations
 
     Returns
     -------
     (corrected, baseline) : tuple of two 1-D arrays, same length as y
 
-    Recommended use cases
-    ----------------------
-    • Graphene oxide (GO)       — broad fluorescent background
-    • Reduced GO (rGO)          — partially quenched but still present
-    • g-C₃N₄                   — strong visible fluorescence under 532 nm
-    • Functionalized graphene with organic residues
-
     Reference
     ---------
-    Baek et al. (2015) Analyst 140, 250–257.
+    Baek et al. (2015) Analyst 140, 250-257.
     DOI: 10.1039/C4AN01061B
     """
-    y = np.asarray(y, dtype=float)
-    n = len(y)
-    D  = csc_matrix(np.diff(np.eye(n), 2))
-    H  = lam * D.dot(D.T)
+    y  = np.asarray(y, dtype=float)
+    n  = len(y)
+    D2 = _second_diff_matrix(n)       # shape (n-2, n)
+    H  = lam * D2.T.dot(D2)           # shape (n, n)
     w  = np.ones(n)
     z  = y.copy()
 
@@ -136,9 +138,9 @@ def arPLS_baseline(
     return y - z, z
 
 
-# ─────────────────────────────────────────────────────────
-# Auto-dispatcher  (v2.5)
-# ─────────────────────────────────────────────────────────
+# -------------------------------------------------------------
+# Auto-dispatcher
+# -------------------------------------------------------------
 def auto_baseline(
     y: np.ndarray,
     method: str = "als",
@@ -156,10 +158,6 @@ def auto_baseline(
     Returns
     -------
     baseline-corrected intensity (y - baseline)
-
-    Usage
-    -----
-    corrected = auto_baseline(raw_intensity, method='arPLS', lam=1e6)
     """
     method = method.lower().replace("-", "").replace("_", "")
     if method == "als":
