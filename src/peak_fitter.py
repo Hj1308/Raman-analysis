@@ -3,7 +3,7 @@ Peak fitting module — scipy core, optional lmfit for advanced models.
 Line shapes per Ferrari & Basko (2013):
   D, G, D', 2D  -> Lorentzian
   D+G           -> Pseudo-Voigt
-  2D bilayer    -> dual-Lorentzian if single R² < 0.90
+  2D bilayer    -> 4-Lorentzian (Ferrari 2006) when single R² < 0.90
 
 Dispersion (eV-based, Cançado 2011 / Ferrari & Basko 2013):
   D:  53 cm⁻¹/eV   (double-resonance, zone-boundary phonon)
@@ -66,6 +66,35 @@ User-picked peak centre → numerical FWHM without parametric fit.
 See function docstring for full details.  Intended for Jupyter /
 CLI workflows where the researcher selects peaks by cursor.
 
+2D bilayer — 4-Lorentzian model (v2.7, Feature #6)
+----------------------------------------------------
+For AB-stacked bilayer graphene the 2D band splits into four
+Lorentzian components due to the splitting of the π bands at K
+[Ferrari et al. 2006, Phys. Rev. Lett. 97, 187401]:
+
+  Label   Position (532 nm)   Relative amplitude
+  P11     ~2680 cm⁻¹          strongest  (≈1.0)
+  P22     ~2695 cm⁻¹          strong     (≈0.7)
+  P12     ~2670 cm⁻¹          weak       (≈0.3)
+  P21     ~2710 cm⁻¹          weak       (≈0.3)
+
+Constraints encoded in _fit_2D_bilayer_4L():
+  - All four centres constrained within ±15 cm⁻¹ of their
+    Ferrari 2006 reference offsets relative to the detected
+    single-peak centre c0.
+  - Amplitudes: A_P12, A_P21 ≤ 0.6 × A_P11 (outer branches weaker).
+  - FWHM reported as numerical FWHM of the composite model_y.
+  - is_bilayer_4L = True flags this fit in PeakResult.
+
+Fitting cascade for 2D band:
+  1. Single Lorentzian (always attempted first)
+     → accepted if R² ≥ 0.90
+  2. 4-Lorentzian bilayer [Ferrari 2006]
+     → attempted if single R² < 0.90
+     → accepted if R²_4L > R²_single
+  3. Dual-Lorentzian fallback
+     → attempted if 4-L fit fails or does not improve R²
+
 G-band strategy for doped / disordered graphene:
   1. Detect true G-peak position with find_peaks in 1540–1680 cm⁻¹.
   2. Build an adaptive ±50 cm⁻¹ window centred on the detected peak.
@@ -127,6 +156,14 @@ _DGDp_HI = 1700.0
 _R2_THRESHOLD  = 0.75    # raised from 0.60 to cut false positives
 _SNR_THRESHOLD = 3.0     # amplitude / σ_noise
 
+# ── 2D bilayer 4-Lorentzian offsets at 532 nm [Ferrari 2006] ──
+# Offsets relative to detected single-peak centre c0
+_2D_P11_OFFSET = -5.0    # cm⁻¹  strongest inner branch
+_2D_P22_OFFSET = +10.0   # cm⁻¹  second inner branch
+_2D_P12_OFFSET = -20.0   # cm⁻¹  outer branch (weaker)
+_2D_P21_OFFSET = +25.0   # cm⁻¹  outer branch (weaker)
+_2D_BILAYER_R2_THRESHOLD = 0.90  # trigger 4-L fit below this
+
 
 def _laser_energy_ev(laser_nm: float) -> float:
     if laser_nm <= 0:
@@ -180,6 +217,7 @@ class PeakResult:
     snr:             float            = np.nan   # amplitude / σ_noise
     found:           bool             = False
     is_split_2D:     bool             = False
+    is_bilayer_4L:   bool             = False    # v2.7: Ferrari 2006 4-L fit
     is_deconvolved:  bool             = False
     deconv_partner:  Optional[object] = field(default=None, repr=False)
     model_x:         np.ndarray       = field(default_factory=lambda: np.array([]))
@@ -233,6 +271,15 @@ def _lorentzian(x, center, amplitude, gamma):
 
 def _dual_lorentzian(x, c1, a1, g1, c2, a2, g2):
     return _lorentzian(x, c1, a1, g1) + _lorentzian(x, c2, a2, g2)
+
+
+def _quad_lorentzian(x, c11, a11, g11, c22, a22, g22,
+                         c12, a12, g12, c21, a21, g21):
+    """4-Lorentzian for bilayer 2D band [Ferrari 2006]."""
+    return (_lorentzian(x, c11, a11, g11)
+            + _lorentzian(x, c22, a22, g22)
+            + _lorentzian(x, c12, a12, g12)
+            + _lorentzian(x, c21, a21, g21))
 
 
 def _triple_lorentzian(x, cD, aD, gD, cG, aG, gG, cDp, aDp, gDp):
@@ -577,10 +624,128 @@ def _fit_D_G_Dp_global(
         return empty
 
 
-# ── 2D fitter ─────────────────────────────────────────────
+# ── 2D bilayer 4-Lorentzian fitter (v2.7, Feature #6) ─────
+def _fit_2D_bilayer_4L(
+    xd: np.ndarray,
+    yd: np.ndarray,
+    c0: float,
+    lo: float,
+    hi: float,
+    r2_single: float,
+) -> Optional[PeakResult]:
+    """
+    Attempt a 4-Lorentzian bilayer fit [Ferrari et al. 2006].
+
+    Four components with constrained positions relative to c0:
+      P11  c0 + _2D_P11_OFFSET  (~2680 cm⁻¹)  strongest inner
+      P22  c0 + _2D_P22_OFFSET  (~2695 cm⁻¹)  second inner
+      P12  c0 + _2D_P12_OFFSET  (~2670 cm⁻¹)  outer (weak)
+      P21  c0 + _2D_P21_OFFSET  (~2710 cm⁻¹)  outer (weak)
+
+    Returns PeakResult with is_bilayer_4L=True if the fit improves
+    on r2_single, otherwise returns None.
+    """
+    if len(xd) < 12:
+        return None
+
+    a0   = float(yd.max())
+    g0   = 12.0   # typical HWHM for each 2D sub-peak
+
+    # Initial positions
+    c11 = c0 + _2D_P11_OFFSET
+    c22 = c0 + _2D_P22_OFFSET
+    c12 = c0 + _2D_P12_OFFSET
+    c21 = c0 + _2D_P21_OFFSET
+
+    # Position bounds: ±15 cm⁻¹ around initial positions
+    _W = 15.0
+
+    # Amplitude bounds: outer branches (P12, P21) ≤ 0.65 × a0
+    p0 = [
+        c11, a0 * 0.7, g0,
+        c22, a0 * 0.5, g0,
+        c12, a0 * 0.25, g0,
+        c21, a0 * 0.25, g0,
+    ]
+    bounds_lo = [
+        c11 - _W, 0,        3,
+        c22 - _W, 0,        3,
+        c12 - _W, 0,        3,
+        c21 - _W, 0,        3,
+    ]
+    bounds_hi = [
+        c11 + _W, np.inf,       40,
+        c22 + _W, np.inf,       40,
+        c12 + _W, a0 * 0.65,    40,
+        c21 + _W, a0 * 0.65,    40,
+    ]
+
+    # Clamp bounds to window
+    bounds_lo[0]  = max(bounds_lo[0],  lo)
+    bounds_hi[0]  = min(bounds_hi[0],  hi)
+    bounds_lo[3]  = max(bounds_lo[3],  lo)
+    bounds_hi[3]  = min(bounds_hi[3],  hi)
+    bounds_lo[6]  = max(bounds_lo[6],  lo)
+    bounds_hi[6]  = min(bounds_hi[6],  hi)
+    bounds_lo[9]  = max(bounds_lo[9],  lo)
+    bounds_hi[9]  = min(bounds_hi[9],  hi)
+
+    try:
+        popt, _ = curve_fit(
+            _quad_lorentzian, xd, yd,
+            p0=p0,
+            bounds=(bounds_lo, bounds_hi),
+            maxfev=20000,
+        )
+    except Exception:
+        return None
+
+    y_fit  = _quad_lorentzian(xd, *popt)
+    r2_4L  = _r2(yd, y_fit)
+
+    # Accept only if 4-L improves R²
+    if r2_4L <= r2_single:
+        return None
+
+    c11f, a11f, g11f = popt[0], popt[1], popt[2]
+    c22f, a22f, g22f = popt[3], popt[4], popt[5]
+
+    # Dominant centre = amplitude-weighted mean of inner pair (P11+P22)
+    w_total = a11f + a22f
+    center  = (c11f * a11f + c22f * a22f) / w_total if w_total > 0 else c0
+    amplitude = float(np.max(y_fit))
+    total_area = float(np.trapz(y_fit, xd))
+    fwhm_num   = compute_fwhm_numerical(xd, y_fit)
+
+    det, snr = _is_detected(amplitude, yd, y_fit, r2_4L)
+
+    return PeakResult(
+        name="2D",
+        center=center,
+        amplitude=amplitude,
+        fwhm=fwhm_num,
+        area=total_area,
+        r_squared=r2_4L,
+        snr=snr,
+        found=det,
+        is_bilayer_4L=True,
+        model_x=xd,
+        model_y=y_fit,
+    )
+
+
+# ── 2D fitter — cascade: single → 4-L bilayer → dual ──────
 def _fit_2D(wn, intensity, lo, hi):
+    """
+    2D band fitting cascade (v2.7):
+      1. Single Lorentzian  — accepted if R² ≥ 0.90
+      2. 4-Lorentzian bilayer [Ferrari 2006]  — if single R² < 0.90
+      3. Dual-Lorentzian fallback             — if 4-L fails / no improvement
+    """
     single = _fit_peak(wn, intensity, lo, hi, "2D")
-    if not single.found or single.r_squared >= 0.90:
+
+    # Single Lorentzian sufficient (monolayer / clean graphene)
+    if not single.found or single.r_squared >= _2D_BILAYER_R2_THRESHOLD:
         return single
 
     mask = (wn >= lo) & (wn <= hi)
@@ -589,6 +754,13 @@ def _fit_2D(wn, intensity, lo, hi):
         return single
 
     c0 = float(xd[np.argmax(yd)])
+
+    # ── Step 2: 4-Lorentzian bilayer [Ferrari 2006] ───────
+    result_4L = _fit_2D_bilayer_4L(xd, yd, c0, lo, hi, single.r_squared)
+    if result_4L is not None:
+        return result_4L
+
+    # ── Step 3: dual-Lorentzian fallback ──────────────────
     a0 = float(yd.max())
     g0 = (hi - lo) / 10.0
 
@@ -711,7 +883,7 @@ def _fit_single_band_lmfit(wn, intensity, band_name, cfg, windows):
     return PeakResult(
         name=display_name, center=center, amplitude=amplitude,
         fwhm=fwhm,
-        area=float(np.trapezoid(model_y, xd)),
+        area=float(np.trapz(model_y, xd)),
         r_squared=r2, snr=snr, found=det,
         model_x=xd, model_y=model_y,
         center_stderr=float(c_err) if c_err is not None else None,
@@ -734,6 +906,11 @@ def fit_all_peaks(
       in rGO/GO [Lee et al. 2021, Carbon 183, 814–822].
     - Fitting uncertainty: center_stderr and fwhm_stderr populated for
       all scipy-fitted peaks from pcov (Feature #3).
+
+    v2.7 addition:
+    - 2D bilayer: 4-Lorentzian model [Ferrari et al. 2006] inserted
+      between single-Lorentzian and dual-Lorentzian in the fitting
+      cascade.  PeakResult.is_bilayer_4L=True marks these fits.
     """
     windows  = get_peak_windows(laser_nm)
     band_cfg = band_config or {}
@@ -800,7 +977,7 @@ def fit_all_peaks(
                     ):
                         results["D_prime"] = dp_deconv
 
-    # ── 2D band ───────────────────────────────────────────
+    # ── 2D band (v2.7: cascade single → 4-L → dual) ──────
     td_method = _method("2D")
     if td_method == "lmfit":
         results["2D"] = _fit_single_band_lmfit(wn, intensity, "2D",
