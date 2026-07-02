@@ -13,6 +13,7 @@ References:
   - Pisana et al. (2007) Nature Mater. 6, 198             — doping G-shift [v2.5]
   - Wu et al. (2018) Carbon 127, 418–428                  — stage boundary [v2.5]
   - Maultzsch et al. (2002) Phys. Rev. B 65, 233402       — D-band dispersion [v2.6]
+  - Lucchese et al. (2010) Carbon 48, 1592                — area-ratio L_D [Fix 1.1]
 
 Change log:
   v2.0  dispersion fix — eV-based window shifts in peak_fitter
@@ -28,6 +29,10 @@ Change log:
   v2.6  Feature #8: dispersion slope validator [Ferrari & Basko 2013;
         Maultzsch 2002] — multi-wavelength D-band slope check;
         deviation > tolerance flags contamination / non-graphitic sp² carbon.
+  Fix 1.1  L_D and B-doping now use A_D/A_G (integrated area ratio) instead
+        of I_D/I_G (height ratio). Height ratios introduce a systematic error
+        ∝ FWHM(D)/FWHM(G); for typical graphene this causes ~2× L_D
+        overestimation. [Lucchese et al. 2010; Ferrari & Robertson 2004]
 
 Python 3.8 compatibility note
 ------------------------------
@@ -265,6 +270,7 @@ _BORON_G_CENTER_MIN  = 1577.0
 _BORON_G_CENTER_MAX  = 1587.0
 _BORON_ID_IDp_MIN    = 5.0
 _BORON_ID_IDp_MAX    = 9.0
+# Fix 1.1: threshold is now compared against A_D/A_G (area ratio)
 _BORON_ID_IG_MIN     = 3.0
 
 
@@ -272,7 +278,7 @@ def _check_boron_doping(
     G:      Optional[PeakResult],
     D:      Optional[PeakResult],
     Dp:     Optional[PeakResult],
-    id_ig:  float,
+    id_ig:  float,   # Fix 1.1: caller must pass ID_IG_area, not ID_IG_height
     id_idp: float,
 ) -> tuple:
     if G is None or not G.found:
@@ -293,7 +299,8 @@ def _check_boron_doping(
             "Boron doping fingerprint detected [Kim et al. 2012, ACS Nano 6, 8203]: "
             "G at {:.1f} cm\u207b\u00b9 (constant, no N-doping blue-shift); "
             "I_D/I_D\u2032 = {:.1f} (sp\u00b3 substitutional B); "
-            "I_D/I_G = {:.2f} > 3.".format(G.center, id_idp, id_ig)
+            "A_D/A_G = {:.2f} > 3 (area ratio, Fix 1.1).".format(
+                G.center, id_idp, id_ig)
         )
         return True, note
     return False, ""
@@ -406,6 +413,14 @@ def analyze(
             analyze(peaks, laser_nm=532, multi_wavelength_D=[
                 (514, 1348.0), (532, 1345.5), (633, 1335.8), (785, 1321.0)
             ])
+
+    Notes — Fix 1.1
+    ---------------
+    L_D_nm is calculated from ID_IG_area (A_D/A_G integrated area ratio),
+    not from ID_IG_height.  Using height ratios introduces a systematic
+    error ∝ FWHM(D)/FWHM(G).  For typical graphene spectra (FWHM_D ≈ 40,
+    FWHM_G ≈ 20 cm⁻¹) height-based L_D is ~2× too large.
+    [Lucchese et al. 2010 Carbon 48 1592; Ferrari & Robertson 2004]
     """
     result = RamanAnalysis()
     D     = peaks.get("D")
@@ -450,15 +465,18 @@ def analyze(
             )
 
     # ── Disorder stage (original, Ferrari & Robertson 2001) ─
+    # NOTE: uses ID_IG_height here intentionally — the Ferrari 2001 stage
+    # classification is a qualitative criterion based on peak height trend,
+    # not the quantitative Cançado area formula. Only L_D uses area (Fix 1.1).
     stage2 = False
     if result.G_found and result.D_found:
         fwhm_g = G.fwhm
-        id_ig  = result.ID_IG_height
-        if not np.isnan(id_ig):
+        id_ig_h = result.ID_IG_height
+        if not np.isnan(id_ig_h):
             if fwhm_g > 80:
                 result.disorder_stage = "Stage 2 (amorphous carbon, FWHM(G) > 80 cm\u207b\u00b9)"
                 stage2 = True
-            elif fwhm_g > 50 and id_ig < 1.2:
+            elif fwhm_g > 50 and id_ig_h < 1.2:
                 result.disorder_stage = "Stage 2 (nanocrystalline\u2192amorphous transition)"
                 stage2 = True
             else:
@@ -471,8 +489,10 @@ def analyze(
     if "Stage 2" in result.stage_refined:
         stage2 = True
 
-    # ── L_D (Cançado et al. 2011) ─────────────────────────
-    if not np.isnan(result.ID_IG_height) and result.ID_IG_height > 0:
+    # ── L_D (Cançado et al. 2011) — Fix 1.1: use area ratio ──
+    # A_D/A_G is the physically correct input to the Cançado formula.
+    # ID_IG_height is retained in RamanAnalysis for display only.
+    if not np.isnan(result.ID_IG_area) and result.ID_IG_area > 0:
         if stage2:
             result.L_D_nm   = np.nan
             result.L_D_note = (
@@ -481,11 +501,12 @@ def analyze(
             )
         else:
             result.L_D_nm   = np.sqrt(
-                (1.8e-9 * laser_nm**4) / result.ID_IG_height
+                (1.8e-9 * laser_nm**4) / result.ID_IG_area
             )
             result.L_D_note = (
                 "Can\u00e7ado et al. (2011); \u03bb={:.0f} nm; "
-                "Stage 1 valid; \u00b114\u2009% uncertainty".format(laser_nm)
+                "Stage 1 valid; \u00b114\u2009% uncertainty; "
+                "A_D/A_G area ratio used (Fix 1.1)".format(laser_nm)
             )
 
     # ── Defect type (Eckmann et al. 2012) ─────────────────
@@ -499,9 +520,10 @@ def analyze(
             result.defect_type = "Grain boundary/edge defects (ID/ID\u2032 = {:.1f} \u22483.5)".format(r)
 
     # ── B-doping fingerprint (v2.4 Feature #2) ────────────
+    # Fix 1.1: pass ID_IG_area instead of ID_IG_height
     result.boron_doping_flag, result.boron_doping_note = _check_boron_doping(
         G, D, Dp,
-        id_ig=result.ID_IG_height,
+        id_ig=result.ID_IG_area,
         id_idp=result.ID_IDp_height,
     )
 
@@ -602,7 +624,7 @@ def format_report(
     lines += [
         "", "  INTENSITY RATIOS",
         "  ID/IG      (height) : {}".format(_fv(analysis.ID_IG_height)),
-        "  ID/IG      (area)   : {}".format(_fv(analysis.ID_IG_area)),
+        "  ID/IG      (area)   : {}  ← used for L_D and B-doping (Fix 1.1)".format(_fv(analysis.ID_IG_area)),
         "  I2D/IG     (height) : {}".format(_fv(analysis.I2D_IG_height)),
         "  I2D/IG     (area)   : {}".format(_fv(analysis.I2D_IG_area)),
         "  ID'/IG     (height) : {}".format(_fv(analysis.IDp_IG_height)),
