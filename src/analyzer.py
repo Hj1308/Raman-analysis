@@ -15,6 +15,7 @@ References:
   - Wu et al. (2018) Carbon 127, 418–428                  — stage boundary [v2.5]
   - Maultzsch et al. (2002) Phys. Rev. B 65, 233402       — D-band dispersion [v2.6]
   - Lucchese et al. (2010) Carbon 48, 1592                — area-ratio L_D [Fix 1.1]
+  - Faugeras et al. (2008) Appl. Phys. Lett. 92, 011914  — SiC substrate effects
 
 Change log:
   v2.0  dispersion fix — eV-based window shifts in peak_fitter
@@ -38,6 +39,12 @@ Change log:
         Old value caused carrier_density_cm2 overflow (~10²⁵).
         Correct form: n [×10¹² cm⁻²] = (Δω_G / 0.61)²  [Pisana 2007 Fig.3].
         Added out-of-range warning when |n| > 5×10¹³ cm⁻² (model validity limit).
+  Fix 1.3  substrate-aware doping: analyze() accepts optional substrate param.
+        For non-free-standing substrates (SiC, hBN, SiO2, quartz, sapphire,
+        mica, Cu, Ni) the I2D/IG-based n/p classification is suppressed and
+        replaced with a substrate-specific warning. SiC substrates receive an
+        additional note about Fuchs-Kliewer phonon overlap near the G band
+        [Faugeras et al. 2008, Appl. Phys. Lett. 92, 011914].
 
 Python 3.8 compatibility note
 ------------------------------
@@ -60,6 +67,20 @@ from .peak_fitter import PeakResult
 _HC_EV_NM          = 1239.841984   # eV·nm
 _D_SLOPE_REFERENCE = 53.0          # cm⁻¹/eV  [Ferrari & Basko 2013]
 _D_SLOPE_TOLERANCE = 10.0          # cm⁻¹/eV  — flag if |measured − ref| > this
+
+# ── Substrates where I2D/IG n/p-type classification is unreliable ──────
+# Das 2008 model was validated on free-standing / SiO2-supported graphene.
+# On these substrates the 2D band is absent, suppressed, or strongly
+# perturbed, making the I2D/IG criterion meaningless.
+_SUBSTRATES_NO_2D_CLASSIFICATION = {
+    "sic", "hbn", "sio2", "quartz", "sapphire", "mica", "cu", "ni",
+    "copper", "nickel", "al2o3", "nbsic", "g-nbsic",
+}
+
+# SiC-specific warning: Fuchs-Kliewer (FK) phonon replicas of 4H/6H-SiC
+# appear at ~1500–1600 cm⁻¹ and can overlap with or blue-shift the G band,
+# making G-shift-based doping estimates unreliable.
+_SIC_KEYWORDS = {"sic", "nbsic", "g-nbsic", "4h-sic", "6h-sic", "3c-sic"}
 
 
 @dataclass
@@ -241,6 +262,8 @@ class RamanAnalysis:
     doping_type:         str   = "N/A"
     carrier_density_cm2: float = np.nan
     doping_note:         str   = ""
+    # ── substrate info (Fix 1.3) ────────────────────────
+    substrate:           str   = "unknown"
     # ── v2.5 Feature #5: refined stage boundary ───────────
     stage_refined:       str   = "N/A"
     stage_refined_note:  str   = ""
@@ -295,8 +318,8 @@ def _check_boron_doping(
     if np.isnan(id_ig) or np.isnan(id_idp):
         return False, ""
 
-    g_ok   = _BORON_G_CENTER_MIN <= G.center <= _BORON_G_CENTER_MAX
-    idp_ok = _BORON_ID_IDp_MIN   <= id_idp   <= _BORON_ID_IDp_MAX
+    g_ok    = _BORON_G_CENTER_MIN <= G.center <= _BORON_G_CENTER_MAX
+    idp_ok  = _BORON_ID_IDp_MIN   <= id_idp   <= _BORON_ID_IDp_MAX
     idig_ok = id_ig >= _BORON_ID_IG_MIN
 
     if g_ok and idp_ok and idig_ok:
@@ -311,24 +334,16 @@ def _check_boron_doping(
     return False, ""
 
 
-# ── Doping level estimator (v2.5, Feature #4; Fix 1.2) ────
+# ── Doping level estimator (v2.5 Feature #4; Fix 1.2; Fix 1.3) ──
 #
-# Fix 1.2 — corrected alpha constant
-# ─────────────────────────────────
-# Pisana et al. (2007) Fig. 3 shows:
+# Fix 1.2 — corrected alpha constant (Pisana 2007 Fig.3)
+# Fix 1.3 — substrate-aware: suppress I2D/IG n/p classification
+#           when substrate is not free-standing graphene.
+#
+# Pisana et al. (2007):
 #   ω_G(n) ≈ ω₀ + 0.61 × √(|n| / 10¹²)   [cm⁻¹]
-# where n is in cm⁻².
-#
-# The old value _ALPHA_PISANA = 2.2e-12 was dimensionally inconsistent
-# (it treated n as a raw cm⁻² number under the square root, producing
-# values ~10²⁵ cm⁻² for typical G-shifts).
-#
-# Correct usage:
-#   n_1e12 = (Δω_G / 0.61)²          [units: 10¹² cm⁻²]
-#   n_cm2  = n_1e12 × 10¹²           [units: cm⁻²]
 #
 # Valid range: |n| < 5×10¹³ cm⁻²  (n_1e12 < 50).
-# Above this limit the model is non-linear and the estimate is flagged.
 
 _G0_UNDOPED   = 1582.0
 _ALPHA_PISANA = 0.61      # cm⁻¹ per sqrt(10¹² cm⁻²)  [Pisana 2007 Fig.3]
@@ -337,13 +352,54 @@ _N_MAX_1E12   = 50.0      # 50 × 10¹² cm⁻² = 5×10¹³ cm⁻²  (model val
 
 
 def _estimate_doping(
-    G:      Optional[PeakResult],
-    i2d_ig: float,
+    G:         Optional[PeakResult],
+    i2d_ig:    float,
+    substrate: str = "unknown",
 ) -> tuple:
+    """
+    Estimate carrier density and doping type from G-band shift.
+
+    Parameters
+    ----------
+    G : PeakResult
+        Fitted G-band result.
+    i2d_ig : float
+        I2D/IG height ratio — used for n/p classification only when
+        substrate is free-standing graphene (Das 2008).
+    substrate : str
+        Substrate identifier (case-insensitive). When this matches a
+        known non-free-standing substrate (SiC, hBN, SiO2, Cu, Ni …)
+        the I2D/IG-based n/p label is suppressed and a substrate-specific
+        warning is included in the note.
+
+    Returns
+    -------
+    (doping_type: str, carrier_density_cm2: float, note: str)
+    """
     if G is None or not G.found:
         return "N/A", np.nan, ""
 
+    substrate_key = substrate.lower().strip()
+    is_non_graphene = substrate_key in _SUBSTRATES_NO_2D_CLASSIFICATION
+    is_sic          = substrate_key in _SIC_KEYWORDS
+
     delta_g = G.center - _G0_UNDOPED
+
+    # ── SiC-specific pre-check ─────────────────────────────
+    # SiC Fuchs-Kliewer phonon replicas appear at ~1500–1600 cm⁻¹ and
+    # can overlap with or artificially shift the graphene G band.
+    # G-shift-based doping estimation is therefore unreliable on SiC.
+    if is_sic:
+        return (
+            "N/A (SiC substrate)",
+            np.nan,
+            "G-shift doping estimation suppressed: SiC substrate detected. "
+            "Fuchs-Kliewer phonon replicas of 4H/6H-SiC appear at "
+            "~1500\u20131600 cm\u207b\u00b9 and can overlap with / shift the graphene G band, "
+            "making Δω_G = {:+.1f} cm\u207b\u00b9 an unreliable doping proxy. "
+            "Use electrolyte gating + in-situ Raman for quantitative doping "
+            "[Faugeras et al. 2008, Appl. Phys. Lett. 92, 011914].".format(delta_g)
+        )
 
     if abs(delta_g) < _DOPING_NOISE:
         return (
@@ -357,8 +413,16 @@ def _estimate_doping(
     n_1e12 = (abs(delta_g) / _ALPHA_PISANA) ** 2
     n_cm2  = n_1e12 * 1e12
 
-    # n/p-type from I2D/IG [Das 2008]
-    if np.isnan(i2d_ig) or i2d_ig < 0.5:
+    # ── n/p-type classification ─────────────────────────────
+    if is_non_graphene:
+        # I2D/IG criterion unreliable — skip n/p label
+        dtype = "N/A (non-graphene substrate: {})".format(substrate)
+        type_note = (
+            "I2D/IG n/p classification suppressed: substrate '{}' "
+            "perturbs or quenches the 2D band — "
+            "Das 2008 criterion not applicable.".format(substrate)
+        )
+    elif np.isnan(i2d_ig) or i2d_ig < 0.5:
         dtype = "n-type"
         type_note = "I2D/IG = {:.2f} < 0.5 \u2192 electron doping [Das 2008]".format(i2d_ig)
     else:
@@ -432,6 +496,7 @@ def _refine_stage(
 def analyze(
     peaks:        Dict[str, PeakResult],
     laser_nm:     float = 532.0,
+    substrate:    str   = "unknown",
     multi_wavelength_D: Optional[List[Tuple[float, float]]] = None,
 ) -> RamanAnalysis:
     """
@@ -442,14 +507,24 @@ def analyze(
     peaks : dict from fit_all_peaks()
     laser_nm : float
         Excitation wavelength used for this measurement.
+    substrate : str, optional
+        Substrate on which the carbon layer is deposited.
+        Default: 'unknown' (treated as free-standing for doping purposes).
+        Known non-graphene substrates that suppress I2D/IG classification:
+        'SiC', 'hBN', 'SiO2', 'quartz', 'sapphire', 'mica', 'Cu', 'Ni'.
+        SiC additionally suppresses G-shift doping estimation due to
+        Fuchs-Kliewer phonon overlap [Faugeras 2008].
+        Case-insensitive. Stored in RamanAnalysis.substrate.
     multi_wavelength_D : list of (laser_nm, D_center_cm1), optional
         If supplied, validate_dispersion_slope() is called and the result
         stored in RamanAnalysis.dispersion_slope (Feature #8, v2.6).
         Example::
 
-            analyze(peaks, laser_nm=532, multi_wavelength_D=[
-                (514, 1348.0), (532, 1345.5), (633, 1335.8), (785, 1321.0)
-            ])
+            analyze(peaks, laser_nm=532, substrate='SiC',
+                    multi_wavelength_D=[
+                        (514, 1348.0), (532, 1345.5),
+                        (633, 1335.8), (785, 1321.0)
+                    ])
 
     Notes — Fix 1.1
     ---------------
@@ -465,8 +540,17 @@ def analyze(
     (0.61 cm⁻¹/√(10¹² cm⁻²)) from Pisana 2007 Fig. 3.  Values outside
     the model's validity range (|n| > 5×10¹³ cm⁻²) are retained but
     flagged with an OUT-OF-RANGE warning in doping_note.
+
+    Notes — Fix 1.3
+    ---------------
+    The substrate parameter controls doping classification behaviour.
+    For SiC: G-shift estimation is fully suppressed (Fuchs-Kliewer overlap).
+    For other non-graphene substrates: G-shift magnitude is computed but
+    the I2D/IG-based n/p label is replaced with a substrate warning.
     """
     result = RamanAnalysis()
+    result.substrate = substrate
+
     D     = peaks.get("D")
     G     = peaks.get("G")
     twoD  = peaks.get("2D")
@@ -514,7 +598,7 @@ def analyze(
     # not the quantitative Cançado area formula. Only L_D uses area (Fix 1.1).
     stage2 = False
     if result.G_found and result.D_found:
-        fwhm_g = G.fwhm
+        fwhm_g  = G.fwhm
         id_ig_h = result.ID_IG_height
         if not np.isnan(id_ig_h):
             if fwhm_g > 80:
@@ -534,8 +618,6 @@ def analyze(
         stage2 = True
 
     # ── L_D (Cançado et al. 2011) — Fix 1.1: use area ratio ──
-    # A_D/A_G is the physically correct input to the Cançado formula.
-    # ID_IG_height is retained in RamanAnalysis for display only.
     if not np.isnan(result.ID_IG_area) and result.ID_IG_area > 0:
         if stage2:
             result.L_D_nm   = np.nan
@@ -564,16 +646,15 @@ def analyze(
             result.defect_type = "Grain boundary/edge defects (ID/ID\u2032 = {:.1f} \u22483.5)".format(r)
 
     # ── B-doping fingerprint (v2.4 Feature #2) ────────────
-    # Fix 1.1: pass ID_IG_area instead of ID_IG_height
     result.boron_doping_flag, result.boron_doping_note = _check_boron_doping(
         G, D, Dp,
         id_ig=result.ID_IG_area,
         id_idp=result.ID_IDp_height,
     )
 
-    # ── v2.5 Feature #4: doping level estimator (Fix 1.2) ─
+    # ── v2.5 Feature #4: doping level estimator (Fix 1.2, 1.3) ─
     result.doping_type, result.carrier_density_cm2, result.doping_note = \
-        _estimate_doping(G, result.I2D_IG_height)
+        _estimate_doping(G, result.I2D_IG_height, substrate=substrate)
 
     # ── v2.6 Feature #8: dispersion slope validator ───────
     if multi_wavelength_D is not None and len(multi_wavelength_D) >= 2:
@@ -590,7 +671,7 @@ def analyze(
         if not fwhm_ok and not np.isnan(fwhm_2d):
             result.twoD_fwhm_warning = True
             fwhm_tag = (
-                " [WARNING: FWHM(2D)={:.1f} cm\u207b\u00b9 > 35 — "
+                " [WARNING: FWHM(2D)={:.1f} cm\u207b\u00b9 > 35 \u2014 "
                 "I2D/IG layer count unreliable]".format(fwhm_2d)
             )
 
@@ -644,7 +725,9 @@ def format_report(
     lines = [
         sep, "  RAMAN ANALYSIS REPORT",
         "  File    : {}".format(filename),
-        "  Laser   : {} nm".format(laser_nm), sep, "",
+        "  Laser   : {} nm".format(laser_nm),
+        "  Substrate: {}".format(analysis.substrate),
+        sep, "",
         "  FITTED PEAKS",
         "  {:<8} {:>18} {:>16} {:>12} {:>12} {:>8}".format(
             "Peak", "Center (cm\u207b\u00b9)", "FWHM (cm\u207b\u00b9)",
