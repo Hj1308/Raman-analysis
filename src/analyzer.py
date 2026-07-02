@@ -11,6 +11,7 @@ References:
   - Kim et al. (2012) ACS Nano 6, 8203                    — B-doping fingerprint
   - Lee et al. (2021) Carbon 183, 814–822                 — D* band / C–O proxy
   - Pisana et al. (2007) Nature Mater. 6, 198             — doping G-shift [v2.5]
+  - Das et al. (2008) Nat. Nanotechnol. 3, 210            — n/p-type from I2D/IG
   - Wu et al. (2018) Carbon 127, 418–428                  — stage boundary [v2.5]
   - Maultzsch et al. (2002) Phys. Rev. B 65, 233402       — D-band dispersion [v2.6]
   - Lucchese et al. (2010) Carbon 48, 1592                — area-ratio L_D [Fix 1.1]
@@ -33,6 +34,10 @@ Change log:
         of I_D/I_G (height ratio). Height ratios introduce a systematic error
         ∝ FWHM(D)/FWHM(G); for typical graphene this causes ~2× L_D
         overestimation. [Lucchese et al. 2010; Ferrari & Robertson 2004]
+  Fix 1.2  _ALPHA_PISANA corrected from 2.2e-12 to 0.61 cm⁻¹/√(10¹² cm⁻²).
+        Old value caused carrier_density_cm2 overflow (~10²⁵).
+        Correct form: n [×10¹² cm⁻²] = (Δω_G / 0.61)²  [Pisana 2007 Fig.3].
+        Added out-of-range warning when |n| > 5×10¹³ cm⁻² (model validity limit).
 
 Python 3.8 compatibility note
 ------------------------------
@@ -176,7 +181,7 @@ def validate_dispersion_slope(
 
     # ── Compose human-readable note ───────────────────────
     points_str = "; ".join(
-        "{:.0f} nm → {:.1f} cm\u207b\u00b9".format(lnm, d)
+        "{:.0f} nm \u2192 {:.1f} cm\u207b\u00b9".format(lnm, d)
         for lnm, d in valid
     )
     r2_str = "R\u00b2 = {:.3f}".format(r2) if np.isfinite(r2) else "R\u00b2 = N/A"
@@ -306,10 +311,29 @@ def _check_boron_doping(
     return False, ""
 
 
-# ── Doping level estimator (v2.5, Feature #4) ─────────────
-_G0_UNDOPED    = 1582.0
-_ALPHA_PISANA  = 2.2e-12
-_DOPING_NOISE  = 3.0
+# ── Doping level estimator (v2.5, Feature #4; Fix 1.2) ────
+#
+# Fix 1.2 — corrected alpha constant
+# ─────────────────────────────────
+# Pisana et al. (2007) Fig. 3 shows:
+#   ω_G(n) ≈ ω₀ + 0.61 × √(|n| / 10¹²)   [cm⁻¹]
+# where n is in cm⁻².
+#
+# The old value _ALPHA_PISANA = 2.2e-12 was dimensionally inconsistent
+# (it treated n as a raw cm⁻² number under the square root, producing
+# values ~10²⁵ cm⁻² for typical G-shifts).
+#
+# Correct usage:
+#   n_1e12 = (Δω_G / 0.61)²          [units: 10¹² cm⁻²]
+#   n_cm2  = n_1e12 × 10¹²           [units: cm⁻²]
+#
+# Valid range: |n| < 5×10¹³ cm⁻²  (n_1e12 < 50).
+# Above this limit the model is non-linear and the estimate is flagged.
+
+_G0_UNDOPED   = 1582.0
+_ALPHA_PISANA = 0.61      # cm⁻¹ per sqrt(10¹² cm⁻²)  [Pisana 2007 Fig.3]
+_DOPING_NOISE = 3.0
+_N_MAX_1E12   = 50.0      # 50 × 10¹² cm⁻² = 5×10¹³ cm⁻²  (model validity limit)
 
 
 def _estimate_doping(
@@ -324,32 +348,45 @@ def _estimate_doping(
     if abs(delta_g) < _DOPING_NOISE:
         return (
             "undoped", 0.0,
-            "G at {:.1f} cm\u207b\u00b9 — shift {:+.1f} cm\u207b\u00b9 "
+            "G at {:.1f} cm\u207b\u00b9 \u2014 shift {:+.1f} cm\u207b\u00b9 "
             "within noise threshold (\u00b1{} cm\u207b\u00b9); undoped [Pisana 2007].".format(
                 G.center, delta_g, _DOPING_NOISE)
         )
 
-    n_cm2 = (abs(delta_g) / _ALPHA_PISANA) ** 2 / 1e12
-    n_abs  = (abs(delta_g) / _ALPHA_PISANA) ** 2
+    # n [×10¹² cm⁻²] = (Δω_G / α)²
+    n_1e12 = (abs(delta_g) / _ALPHA_PISANA) ** 2
+    n_cm2  = n_1e12 * 1e12
 
+    # n/p-type from I2D/IG [Das 2008]
     if np.isnan(i2d_ig) or i2d_ig < 0.5:
         dtype = "n-type"
-        type_note = "I2D/IG = {:.2f} < 0.5 → electron doping [Das 2008]".format(i2d_ig)
+        type_note = "I2D/IG = {:.2f} < 0.5 \u2192 electron doping [Das 2008]".format(i2d_ig)
     else:
         dtype = "p-type"
         type_note = "I2D/IG = {:.2f} \u2265 0.5 \u2192 hole doping [Das 2008]".format(i2d_ig)
 
+    # ── Out-of-range warning (Fix 1.2) ────────────────────
+    if n_1e12 > _N_MAX_1E12:
+        out_of_range_warn = (
+            " \u26a0 OUT-OF-RANGE: |n| = {:.1f} \u00d7 10\u00b9\u00b2 cm\u207b\u00b2 "
+            "> 50 \u00d7 10\u00b9\u00b2 cm\u207b\u00b2; "
+            "Pisana 2007 model valid only for |n| < 5\u00d710\u00b9\u00b3 cm\u207b\u00b2. "
+            "Result unreliable \u2014 strain, disorder, or substrate effects likely."
+        ).format(n_1e12)
+    else:
+        out_of_range_warn = ""
+
     note = (
-        "G blue-shift \u0394\u03c9_G = {:+.1f} cm\u207b\u00b9 from undoped ({} cm\u207b\u00b9); "
-        "estimated |n| \u2248 {:.2f} \u00d7 10\u00b9\u00b2 cm\u207b\u00b2; "
-        "{}. "
+        "G shift \u0394\u03c9_G = {:+.1f} cm\u207b\u00b9 from undoped ({} cm\u207b\u00b9); "
+        "estimated |n| \u2248 {:.1f} \u00d7 10\u00b9\u00b2 cm\u207b\u00b2; "
+        "{}.{} "
         "[Pisana et al. 2007, Nature Mater. 6, 198; "
         "Das et al. 2008, Nat. Nanotechnol. 3, 210. "
         "Valid for |n| < 5\u00d710\u00b9\u00b3 cm\u207b\u00b2; "
         "strain effects can mimic doping shift.]".format(
-            delta_g, _G0_UNDOPED, n_cm2, type_note)
+            delta_g, _G0_UNDOPED, n_1e12, type_note, out_of_range_warn)
     )
-    return dtype, n_abs, note
+    return dtype, n_cm2, note
 
 
 # ── Stage boundary refinement (v2.5, Feature #5) ──────────
@@ -421,6 +458,13 @@ def analyze(
     error ∝ FWHM(D)/FWHM(G).  For typical graphene spectra (FWHM_D ≈ 40,
     FWHM_G ≈ 20 cm⁻¹) height-based L_D is ~2× too large.
     [Lucchese et al. 2010 Carbon 48 1592; Ferrari & Robertson 2004]
+
+    Notes — Fix 1.2
+    ---------------
+    carrier_density_cm2 is now computed with the corrected alpha constant
+    (0.61 cm⁻¹/√(10¹² cm⁻²)) from Pisana 2007 Fig. 3.  Values outside
+    the model's validity range (|n| > 5×10¹³ cm⁻²) are retained but
+    flagged with an OUT-OF-RANGE warning in doping_note.
     """
     result = RamanAnalysis()
     D     = peaks.get("D")
@@ -527,7 +571,7 @@ def analyze(
         id_idp=result.ID_IDp_height,
     )
 
-    # ── v2.5 Feature #4: doping level estimator ───────────
+    # ── v2.5 Feature #4: doping level estimator (Fix 1.2) ─
     result.doping_type, result.carrier_density_cm2, result.doping_note = \
         _estimate_doping(G, result.I2D_IG_height)
 
@@ -615,8 +659,7 @@ def format_report(
                 deconv = " [deconvolved G+D']" if getattr(p, "is_deconvolved", False) else ""
                 status = (
                     "{:>18} {:>16} {:12.1f} {:12.1f} {:8.3f}{}{}".format(
-                        _fc(p), _ff(p), p.amplitude, p.area, p.r_squared, note, deconv)
-                )
+                        _fc(p), _ff(p), p.amplitude, p.area, p.r_squared, note, deconv))
             else:
                 status = "       Not detected"
             lines.append("  {:<8} {}".format(p.name, status))
@@ -624,7 +667,7 @@ def format_report(
     lines += [
         "", "  INTENSITY RATIOS",
         "  ID/IG      (height) : {}".format(_fv(analysis.ID_IG_height)),
-        "  ID/IG      (area)   : {}  ← used for L_D and B-doping (Fix 1.1)".format(_fv(analysis.ID_IG_area)),
+        "  ID/IG      (area)   : {}  \u2190 used for L_D and B-doping (Fix 1.1)".format(_fv(analysis.ID_IG_area)),
         "  I2D/IG     (height) : {}".format(_fv(analysis.I2D_IG_height)),
         "  I2D/IG     (area)   : {}".format(_fv(analysis.I2D_IG_area)),
         "  ID'/IG     (height) : {}".format(_fv(analysis.IDp_IG_height)),
