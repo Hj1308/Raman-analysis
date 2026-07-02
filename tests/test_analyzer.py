@@ -274,7 +274,11 @@ class TestBoronDopingAreaRatio:
         d  = _mock_peak("D", center=1350.0,
                         amplitude=100.0 * height_ratio,
                         area=2500.0 * area_ratio)
-        dp = _mock_peak("D_prime", center=1620.0, amplitude=14.0, area=196.0)
+        dp = _mock_peak(
+    "D_prime", center=1620.0,
+    amplitude=(100.0 * height_ratio) / 7.0,
+    area=196.0,
+)
         return {"G": g, "D": d, "D_prime": dp}
 
     def test_boron_flag_set_when_area_above_threshold(self):
