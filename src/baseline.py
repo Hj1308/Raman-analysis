@@ -1,30 +1,24 @@
 """
 Baseline correction methods for Raman spectra.
 
-Methods
-───────
-  als_baseline      : Asymmetric Least Squares (Eilers & Boelens 2005)
-                      Good for broad, slowly varying backgrounds.
-  arPLS_baseline    : Asymmetrically Reweighted Penalised Least Squares
-                      (Baek et al. 2015, Analyst 140, 250).
-                      Superior for fluorescence-heavy spectra (GO, g-C3N4):
-                      automatically down-weights positive residuals (peaks)
-                      so the baseline hugs the true background more tightly.
-  auto_baseline     : Dispatcher — selects als or arPLS by name.
-  correct_baseline  : Public alias for auto_baseline (used by streamlit_app
-                      and external callers).
+Public API
+----------
+  als_baseline(y, lam, p, niter)         -> (corrected, baseline)
+  arPLS_baseline(y, lam, ratio, niter)   -> (corrected, baseline)
+  auto_baseline(y, method, **kwargs)     -> corrected   (single array)
+  correct_baseline(wn, y, method, ...)   -> (corrected, baseline)  ← used by streamlit_app
 
 Change log
-──────────
-  v2.0   als_baseline (original)
-  v2.5   arPLS_baseline added [Feature #7]
-         auto_baseline() dispatcher added
-  v2.5.1 Fix: replaced legacy diags() call with np.diff(np.eye(n), 2)
-         compatible with scipy >= 1.11 (diags_array API change).
-  v2.5.2 Fix: corrected D2 orientation so H = lam * D2.T @ D2 is (n x n),
-         resolving 'inconsistent shapes' error in Z = W + H.
-  v2.5.3 Fix: added correct_baseline alias → resolves ImportError in
-         streamlit_app.py (line 40) on Streamlit Cloud.
+----------
+  v2.0    als_baseline (original)
+  v2.5    arPLS_baseline + auto_baseline added [Feature #7]
+  v2.5.1  Fix: np.diff(np.eye(n), 2) replaces legacy diags() call
+  v2.5.2  Fix: D2 orientation corrected so H = lam * D2.T @ D2 is (n x n)
+  v2.5.3  Fix: add correct_baseline alias  (ImportError on Streamlit Cloud)
+  v2.5.4  Fix: correct_baseline is now a proper wrapper, not a bare alias
+          - accepts (wn, y, method, lam, p, ...)  matching streamlit_app.py call
+          - always returns (corrected, baseline) tuple  (unpack crash fixed)
+          - 'linear' method added (subtract straight line between endpoints)
 """
 
 import numpy as np
@@ -32,23 +26,22 @@ from scipy.sparse import csc_matrix, diags
 from scipy.sparse.linalg import spsolve
 
 
+# ------------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------------
+
 def _second_diff_matrix(n: int):
     """
-    Return sparse second-difference matrix D2 with shape (n-2, n),
-    so that D2.T.dot(D2) has shape (n, n) and can be added to
-    the diagonal weight matrix W (also n x n).
-
-    np.diff(np.eye(n), 2) produces shape (n, n-2) — that is the
-    forward-difference convention.  We need D in (n-2, n) form, so
-    we take the transpose.
+    Sparse second-difference matrix D2, shape (n-2, n).
+    np.diff(np.eye(n), 2) -> (n, n-2); we need (n-2, n) so we transpose.
     """
-    # diff result: shape (n, n-2)  -> transpose -> (n-2, n)
     return csc_matrix(np.diff(np.eye(n), 2).T)
 
 
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
 # ALS baseline
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
+
 def als_baseline(
     y: np.ndarray,
     lam: float = 1e5,
@@ -56,18 +49,18 @@ def als_baseline(
     niter: int = 10,
 ) -> tuple:
     """
-    Asymmetric Least Squares baseline.
+    Asymmetric Least Squares baseline correction.
 
     Parameters
     ----------
-    y     : intensity array (1-D)
-    lam   : smoothness penalty (1e3-1e7 typical)
-    p     : asymmetry weight (0.001-0.1; smaller -> baseline hugs minima)
-    niter : number of IRLS iterations
+    y     : 1-D intensity array
+    lam   : smoothness penalty  (1e3 – 1e7 typical)
+    p     : asymmetry weight    (0.001 – 0.1; smaller -> hugs minima)
+    niter : IRLS iterations
 
     Returns
     -------
-    (corrected, baseline) : tuple of two 1-D arrays, same length as y
+    (corrected, baseline) : two 1-D arrays of the same length as y
 
     Reference
     ---------
@@ -76,21 +69,22 @@ def als_baseline(
     """
     y  = np.asarray(y, dtype=float)
     n  = len(y)
-    D2 = _second_diff_matrix(n)       # shape (n-2, n)
-    H  = lam * D2.T.dot(D2)           # shape (n, n)  <-- correct
+    D2 = _second_diff_matrix(n)   # (n-2, n)
+    H  = lam * D2.T.dot(D2)       # (n, n)
     w  = np.ones(n)
     z  = y.copy()
     for _ in range(niter):
-        W = diags(w, 0, format="csc")  # shape (n, n)
-        Z = W + H                      # both (n, n) -> no shape error
+        W = diags(w, 0, format="csc")
+        Z = W + H
         z = spsolve(Z, w * y)
         w = p * (y > z) + (1 - p) * (y <= z)
     return y - z, z
 
 
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
 # arPLS baseline
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
+
 def arPLS_baseline(
     y: np.ndarray,
     lam: float   = 1e5,
@@ -102,27 +96,25 @@ def arPLS_baseline(
 
     Parameters
     ----------
-    y     : intensity array (1-D, raw input)
-    lam   : smoothness penalty (1e4-1e7)
+    y     : 1-D intensity array (raw)
+    lam   : smoothness penalty  (1e4 – 1e7)
     ratio : convergence criterion
     niter : maximum iterations
 
     Returns
     -------
-    (corrected, baseline) : tuple of two 1-D arrays, same length as y
+    (corrected, baseline) : two 1-D arrays of the same length as y
 
     Reference
     ---------
-    Baek et al. (2015) Analyst 140, 250-257.
-    DOI: 10.1039/C4AN01061B
+    Baek et al. (2015) Analyst 140, 250-257.  DOI: 10.1039/C4AN01061B
     """
     y  = np.asarray(y, dtype=float)
     n  = len(y)
-    D2 = _second_diff_matrix(n)       # shape (n-2, n)
-    H  = lam * D2.T.dot(D2)           # shape (n, n)
+    D2 = _second_diff_matrix(n)
+    H  = lam * D2.T.dot(D2)
     w  = np.ones(n)
     z  = y.copy()
-
     for _ in range(niter):
         W     = diags(w, 0, format="csc")
         Z     = W + H
@@ -139,47 +131,99 @@ def arPLS_baseline(
         w = w_new
         if change < ratio:
             break
-
     return y - z, z
 
 
-# -------------------------------------------------------------
-# Auto-dispatcher
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
+# Linear baseline  (endpoint subtraction)
+# ------------------------------------------------------------------
+
+def _linear_baseline(y: np.ndarray) -> tuple:
+    """
+    Subtract a straight line connecting the first and last intensity points.
+    Fast fallback; no parameters needed.
+
+    Returns
+    -------
+    (corrected, baseline)
+    """
+    y  = np.asarray(y, dtype=float)
+    n  = len(y)
+    bl = np.linspace(y[0], y[-1], n)
+    return y - bl, bl
+
+
+# ------------------------------------------------------------------
+# auto_baseline  (single-array dispatcher — internal use)
+# ------------------------------------------------------------------
+
 def auto_baseline(
     y: np.ndarray,
     method: str = "als",
     **kwargs,
 ) -> np.ndarray:
     """
-    Dispatcher for baseline correction methods.
+    Dispatcher returning only the corrected array (no baseline).
+    Used internally; external callers should use correct_baseline().
 
     Parameters
     ----------
     y      : raw intensity array
-    method : 'als' (default) or 'arPLS'
+    method : 'als' (default), 'arPLS', or 'linear'
     **kwargs : forwarded to the chosen method
 
     Returns
     -------
-    baseline-corrected intensity (y - baseline)
+    corrected : 1-D array  (y - baseline)
     """
-    method = method.lower().replace("-", "").replace("_", "")
-    if method == "als":
-        corrected, _ = als_baseline(y, **kwargs)
-    elif method in ("arpls", "arplsbaseline"):
-        corrected, _ = arPLS_baseline(y, **kwargs)
-    else:
-        raise ValueError(
-            "Unknown baseline method: {!r}. "
-            "Choose 'als' or 'arPLS'.".format(method)
-        )
+    corrected, _ = correct_baseline(None, y, method, **kwargs)
     return corrected
 
 
-# -------------------------------------------------------------
-# Public alias — keeps streamlit_app.py and any external code
-# that does `from src.baseline import correct_baseline` working.
-# correct_baseline(y, method='als'|'arPLS', **kwargs) -> corrected array
-# -------------------------------------------------------------
-correct_baseline = auto_baseline
+# ------------------------------------------------------------------
+# correct_baseline  ← PRIMARY public function for streamlit_app.py
+# ------------------------------------------------------------------
+
+def correct_baseline(
+    wn,
+    y: np.ndarray,
+    method: str = "als",
+    lam: float  = 1e5,
+    p: float    = 0.001,
+    ratio: float = 1e-6,
+    niter: int  = 10,
+) -> tuple:
+    """
+    Unified baseline correction entry-point.
+
+    Signature matches the call in streamlit_app.py:
+        corrected, baseline_arr = correct_baseline(
+            wn, intensity, method=baseline_method, lam=als_lam, p=als_p
+        )
+
+    Parameters
+    ----------
+    wn     : wavenumber array (accepted but not used; kept for API compat)
+    y      : 1-D raw intensity array
+    method : 'als' (default)  |  'arPLS'  |  'linear'
+    lam    : ALS / arPLS smoothness penalty
+    p      : ALS asymmetry weight
+    ratio  : arPLS convergence criterion
+    niter  : iteration count
+
+    Returns
+    -------
+    (corrected, baseline) : two 1-D arrays, same length as y
+    """
+    y = np.asarray(y, dtype=float)
+    m = method.lower().replace("-", "").replace("_", "")
+
+    if m == "als":
+        return als_baseline(y, lam=lam, p=p, niter=niter)
+    elif m in ("arpls", "arplsbaseline"):
+        return arPLS_baseline(y, lam=lam, ratio=ratio, niter=niter)
+    elif m == "linear":
+        return _linear_baseline(y)
+    else:
+        # Unknown method: fall back to ALS with a warning-safe default
+        return als_baseline(y, lam=lam, p=p, niter=niter)
