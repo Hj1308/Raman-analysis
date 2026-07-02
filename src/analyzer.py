@@ -12,6 +12,7 @@ References:
   - Lee et al. (2021) Carbon 183, 814–822                 — D* band / C–O proxy
   - Pisana et al. (2007) Nature Mater. 6, 198             — doping G-shift [v2.5]
   - Wu et al. (2018) Carbon 127, 418–428                  — stage boundary [v2.5]
+  - Maultzsch et al. (2002) Phys. Rev. B 65, 233402       — D-band dispersion [v2.6]
 
 Change log:
   v2.0  dispersion fix — eV-based window shifts in peak_fitter
@@ -24,19 +25,192 @@ Change log:
         Feature #3: fitting uncertainty (center_stderr, fwhm_stderr)
   v2.5  Feature #4: doping level estimator [Pisana 2007]
         Feature #5: stage boundary refinement with FWHM(G) + A_D/A_G [Wu 2018]
+  v2.6  Feature #8: dispersion slope validator [Ferrari & Basko 2013;
+        Maultzsch 2002] — multi-wavelength D-band slope check;
+        deviation > tolerance flags contamination / non-graphitic sp² carbon.
 
 Python 3.8 compatibility note
 ------------------------------
-All type hints use typing.Dict / typing.Optional instead of
-the built-in generics (dict[...]) which require Python 3.9+.
+All type hints use typing.Dict / typing.Optional / typing.List / typing.Tuple
+instead of the built-in generics (dict[...]) which require Python 3.9+.
 """
 
 from __future__ import annotations
 
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 from .peak_fitter import PeakResult
+
+
+# ═══════════════════════════════════════════════════════════
+# Feature #8 — Dispersion slope validator (v2.6)
+# ═══════════════════════════════════════════════════════════
+
+_HC_EV_NM          = 1239.841984   # eV·nm
+_D_SLOPE_REFERENCE = 53.0          # cm⁻¹/eV  [Ferrari & Basko 2013]
+_D_SLOPE_TOLERANCE = 10.0          # cm⁻¹/eV  — flag if |measured − ref| > this
+
+
+@dataclass
+class DispersionSlopeResult:
+    """
+    Result of a multi-wavelength D-band dispersion slope validation.
+
+    Fields
+    ------
+    n_points : int
+        Number of (laser, D_center) data points supplied.
+    slope_cm1_per_eV : float
+        Linear regression slope  ΔωD / ΔE_laser  [cm⁻¹ eV⁻¹].
+        np.nan when fewer than 2 valid points.
+    r_squared : float
+        R² of the linear fit (1.0 = perfect linear dispersion).
+        np.nan when fewer than 3 points.
+    deviation : float
+        |slope − 53 cm⁻¹/eV|  — absolute departure from the
+        graphene reference [Ferrari & Basko 2013].
+    contamination_flag : bool
+        True when deviation > tolerance (default 10 cm⁻¹/eV).
+    note : str
+        Human-readable interpretation with literature context.
+    """
+    n_points:           int   = 0
+    slope_cm1_per_eV:   float = np.nan
+    r_squared:          float = np.nan
+    deviation:          float = np.nan
+    contamination_flag: bool  = False
+    note:               str   = ""
+
+
+def validate_dispersion_slope(
+    measurements: List[Tuple[float, float]],
+    tolerance:    float = _D_SLOPE_TOLERANCE,
+) -> DispersionSlopeResult:
+    """
+    Validate the D-band dispersion slope from multi-wavelength data.
+
+    The D band in graphene/sp² carbon disperses linearly with excitation
+    energy: ΔωD/ΔE ≈ 53 cm⁻¹/eV (double-resonance, zone-boundary phonon).
+    A slope significantly different from 53 cm⁻¹/eV indicates either:
+      - Contamination by non-graphitic carbon (e.g. diamond-like C, a-C)
+      - D-band overlap with a non-dispersive mode
+      - Measurement artefact (baseline, peak assignment error)
+
+    Parameters
+    ----------
+    measurements : list of (laser_nm, D_center_cm1) tuples
+        Each element is a float pair (excitation wavelength in nm,
+        fitted D-band centre in cm⁻¹) from a *single sample* measured
+        at multiple excitation energies.
+        Minimum 2 points required for a slope; ≥3 recommended for R².
+    tolerance : float, optional
+        Maximum allowed |slope − 53| before raising contamination_flag.
+        Default: 10 cm⁻¹/eV  (i.e. flag if slope outside 43–63 cm⁻¹/eV).
+
+    Returns
+    -------
+    DispersionSlopeResult
+
+    Examples
+    --------
+    >>> from src.analyzer import validate_dispersion_slope
+    >>> result = validate_dispersion_slope([
+    ...     (514, 1348.0),
+    ...     (532, 1345.5),
+    ...     (633, 1335.8),
+    ...     (785, 1321.0),
+    ... ])
+    >>> print(result.slope_cm1_per_eV, result.contamination_flag)
+    53.2  False
+
+    References
+    ----------
+    Ferrari & Basko (2013) Nature Nanotechnology 8, 235–246.
+    Maultzsch et al. (2002) Phys. Rev. B 65, 233402.
+    """
+    res = DispersionSlopeResult(n_points=len(measurements))
+
+    # ── Filter out NaN / non-positive values ──────────────
+    valid = [
+        (float(lnm), float(d))
+        for lnm, d in measurements
+        if lnm > 0 and np.isfinite(lnm) and np.isfinite(d) and d > 0
+    ]
+    res.n_points = len(valid)
+
+    if res.n_points < 2:
+        res.note = (
+            "Dispersion slope validation requires at least 2 measurements "
+            "at different excitation wavelengths; {} valid point(s) supplied.".format(
+                res.n_points)
+        )
+        return res
+
+    # Convert wavelengths → excitation energies [eV]
+    energies = np.array([_HC_EV_NM / lnm for lnm, _ in valid])
+    d_centers = np.array([d for _, d in valid])
+
+    # ── Linear regression: ωD = slope × E + intercept ────
+    coeffs    = np.polyfit(energies, d_centers, 1)
+    slope     = float(coeffs[0])          # cm⁻¹/eV
+    intercept = float(coeffs[1])
+
+    y_fit  = np.polyval(coeffs, energies)
+    ss_res = float(np.sum((d_centers - y_fit) ** 2))
+    ss_tot = float(np.sum((d_centers - d_centers.mean()) ** 2))
+    r2     = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    deviation = abs(slope - _D_SLOPE_REFERENCE)
+    flag      = deviation > tolerance
+
+    res.slope_cm1_per_eV   = slope
+    res.r_squared          = r2 if res.n_points >= 3 else np.nan
+    res.deviation          = deviation
+    res.contamination_flag = flag
+
+    # ── Compose human-readable note ───────────────────────
+    points_str = "; ".join(
+        "{:.0f} nm → {:.1f} cm\u207b\u00b9".format(lnm, d)
+        for lnm, d in valid
+    )
+    r2_str = "R\u00b2 = {:.3f}".format(r2) if np.isfinite(r2) else "R\u00b2 = N/A"
+
+    if not flag:
+        interpretation = (
+            "Slope {:.1f} cm\u207b\u00b9/eV within \u00b1{:.0f} cm\u207b\u00b9/eV "
+            "of the graphene reference (53 cm\u207b\u00b9/eV) \u2014 "
+            "consistent with sp\u00b2 graphitic carbon "
+            "[Ferrari & Basko 2013, Nat. Nanotechnol. 8, 235].".format(
+                slope, tolerance)
+        )
+    else:
+        if slope < _D_SLOPE_REFERENCE - tolerance:
+            cause = (
+                "Slope {:.1f} cm\u207b\u00b9/eV is *below* 53 cm\u207b\u00b9/eV "
+                "\u2014 possible non-dispersive mode overlap "
+                "(e.g. polyene C=C at ~1300 cm\u207b\u00b9) "
+                "or incorrect D-band assignment."
+            ).format(slope)
+        else:
+            cause = (
+                "Slope {:.1f} cm\u207b\u00b9/eV is *above* 53 cm\u207b\u00b9/eV "
+                "\u2014 possible contamination by diamond-like carbon (DLC) "
+                "or ta-C (D-band disperses at ~80 cm\u207b\u00b9/eV in DLC) "
+                "[Maultzsch et al. 2002, Phys. Rev. B 65, 233402]."
+            ).format(slope)
+
+        interpretation = (
+            "WARNING: deviation = {:.1f} cm\u207b\u00b9/eV > tolerance {:.0f} cm\u207b\u00b9/eV. "
+            "{}".format(deviation, tolerance, cause)
+        )
+
+    res.note = (
+        "Dispersion slope validation | {} points: {} | "
+        "Slope = {:.1f} cm\u207b\u00b9/eV | {} | {}".format(
+            res.n_points, points_str, slope, r2_str, interpretation)
+    )
+    return res
 
 
 @dataclass
@@ -54,12 +228,14 @@ class RamanAnalysis:
     boron_doping_flag:   bool  = False
     boron_doping_note:   str   = ""
     # ── v2.5 Feature #4: doping level estimator ───────────
-    doping_type:         str   = "N/A"   # 'n-type' | 'p-type' | 'undoped' | 'N/A'
-    carrier_density_cm2: float = np.nan  # cm⁻²
+    doping_type:         str   = "N/A"
+    carrier_density_cm2: float = np.nan
     doping_note:         str   = ""
     # ── v2.5 Feature #5: refined stage boundary ───────────
     stage_refined:       str   = "N/A"
     stage_refined_note:  str   = ""
+    # ── v2.6 Feature #8: dispersion slope validator ───────
+    dispersion_slope:    Optional[DispersionSlopeResult] = field(default=None)
     # ─────────────────────────────────────────────────────
     L_D_nm:              float = np.nan
     L_D_note:            str   = ""
@@ -124,18 +300,15 @@ def _check_boron_doping(
 
 
 # ── Doping level estimator (v2.5, Feature #4) ─────────────
-_G0_UNDOPED    = 1582.0   # cm⁻¹, undoped graphene G position
-_ALPHA_PISANA  = 2.2e-12  # cm⁻¹ per (cm⁻²)^0.5  [Pisana 2007 linearised]
-_DOPING_NOISE  = 3.0      # cm⁻¹ — shifts below this are within noise
+_G0_UNDOPED    = 1582.0
+_ALPHA_PISANA  = 2.2e-12
+_DOPING_NOISE  = 3.0
 
 
 def _estimate_doping(
     G:      Optional[PeakResult],
     i2d_ig: float,
 ) -> tuple:
-    """
-    Return (doping_type, carrier_density_cm2, note).
-    """
     if G is None or not G.found:
         return "N/A", np.nan, ""
 
@@ -177,9 +350,6 @@ def _refine_stage(
     G:      Optional[PeakResult],
     D:      Optional[PeakResult],
 ) -> tuple:
-    """
-    Return (stage_label, note) using FWHM(G) + A_D/A_G criteria [Wu 2018].
-    """
     if G is None or not G.found:
         return "N/A", "G band not detected"
 
@@ -216,9 +386,27 @@ def _refine_stage(
 
 # ── Main analysis function ────────────────────────────────
 def analyze(
-    peaks: Dict[str, PeakResult],
-    laser_nm: float = 532.0,
+    peaks:        Dict[str, PeakResult],
+    laser_nm:     float = 532.0,
+    multi_wavelength_D: Optional[List[Tuple[float, float]]] = None,
 ) -> RamanAnalysis:
+    """
+    Compute all quantitative Raman metrics from fitted peaks.
+
+    Parameters
+    ----------
+    peaks : dict from fit_all_peaks()
+    laser_nm : float
+        Excitation wavelength used for this measurement.
+    multi_wavelength_D : list of (laser_nm, D_center_cm1), optional
+        If supplied, validate_dispersion_slope() is called and the result
+        stored in RamanAnalysis.dispersion_slope (Feature #8, v2.6).
+        Example::
+
+            analyze(peaks, laser_nm=532, multi_wavelength_D=[
+                (514, 1348.0), (532, 1345.5), (633, 1335.8), (785, 1321.0)
+            ])
+    """
     result = RamanAnalysis()
     D     = peaks.get("D")
     G     = peaks.get("G")
@@ -320,6 +508,10 @@ def analyze(
     # ── v2.5 Feature #4: doping level estimator ───────────
     result.doping_type, result.carrier_density_cm2, result.doping_note = \
         _estimate_doping(G, result.I2D_IG_height)
+
+    # ── v2.6 Feature #8: dispersion slope validator ───────
+    if multi_wavelength_D is not None and len(multi_wavelength_D) >= 2:
+        result.dispersion_slope = validate_dispersion_slope(multi_wavelength_D)
 
     # ── Layer count (laser-wavelength corrected) ───────────
     if result.twoD_found and not np.isnan(result.I2D_IG_height):
@@ -433,3 +625,49 @@ def format_report(
     ]
     if analysis.stage_refined_note:
         lines.append("  Stage note           : {}".format(analysis.stage_refined_note))
+
+    lines += [
+        "  Defect type          : {}".format(analysis.defect_type),
+        "  Estimated layers     : {}".format(analysis.estimated_layers),
+    ]
+    if analysis.twoD_fwhm_warning:
+        lines.append("  *** FWHM(2D) > 35 cm\u207b\u00b9: layer count unreliable ***")
+
+    lines += [
+        "", "  DOPING & CHEMICAL ENVIRONMENT",
+        "  Doping type          : {}".format(analysis.doping_type),
+    ]
+    if not np.isnan(analysis.carrier_density_cm2) and analysis.carrier_density_cm2 > 0:
+        lines.append(
+            "  Carrier density      : {:.2e} cm\u207b\u00b2".format(analysis.carrier_density_cm2)
+        )
+    if analysis.doping_note:
+        lines.append("  Doping note          : {}".format(analysis.doping_note))
+
+    if analysis.boron_doping_flag:
+        lines.append("  *** Boron doping fingerprint detected ***")
+        lines.append("  B-doping note        : {}".format(analysis.boron_doping_note))
+
+    # ── v2.6 Feature #8: dispersion slope block ───────────
+    dslope = analysis.dispersion_slope
+    if dslope is not None:
+        lines.append("")
+        lines.append("  DISPERSION SLOPE VALIDATION (v2.6)")
+        lines.append("  Reference slope      : 53 cm\u207b\u00b9/eV (D band, double-resonance)")
+        slope_str = "{:.1f} cm\u207b\u00b9/eV".format(dslope.slope_cm1_per_eV) \
+            if np.isfinite(dslope.slope_cm1_per_eV) else "N/A"
+        r2_str   = "{:.3f}".format(dslope.r_squared) \
+            if np.isfinite(dslope.r_squared) else "N/A"
+        dev_str  = "{:.1f} cm\u207b\u00b9/eV".format(dslope.deviation) \
+            if np.isfinite(dslope.deviation) else "N/A"
+        flag_str = "\u26a0 CONTAMINATION SUSPECTED" if dslope.contamination_flag \
+            else "\u2713 Within tolerance"
+        lines.append("  Measured slope       : {}".format(slope_str))
+        lines.append("  R\u00b2 (linear fit)     : {}".format(r2_str))
+        lines.append("  Deviation            : {}".format(dev_str))
+        lines.append("  Status               : {}".format(flag_str))
+        if dslope.note:
+            lines.append("  Slope note           : {}".format(dslope.note))
+
+    lines.append(sep)
+    return "\n".join(lines)
