@@ -69,9 +69,18 @@ class TestHelpers:
         assert 0.85 < sigma < 1.15
 
     def test_is_detected_both_gates(self):
-        y_obs = np.ones(100) * 5.0
-        y_fit = np.ones(100) * 5.0
-        det, snr = _is_detected(10.0, y_obs, y_fit, r2=0.95)
+        """
+        _is_detected needs a realistic signal above a noisy background.
+        A flat array has zero noise-sigma (MAD=0), so SNR=inf or undefined.
+        Use a noisy background with a clear peak to get a finite SNR > 3.
+        """
+        rng = np.random.default_rng(42)
+        # Background noise sigma ≈ 1.0
+        y_obs = rng.normal(0.0, 1.0, 200)
+        # Perfect Lorentzian fit with amplitude 20 (SNR ≈ 20 >> 3)
+        x = np.linspace(-5, 5, 200)
+        y_fit = 20.0 / (1.0 + x**2)
+        det, snr = _is_detected(20.0, y_obs, y_fit, r2=0.95)
         assert det is True
         assert snr > 3.0
 
@@ -153,7 +162,6 @@ class TestSNRGate:
         """Very noisy spectrum: weak G should be rejected by SNR gate."""
         peaks = fit_all_peaks(wavenumbers, noisy_spectrum, laser_nm=532)
         g = peaks["G"]
-        # Either not found, or if found SNR must be above threshold
         if g.found:
             assert g.snr >= 3.0
 

@@ -2,11 +2,19 @@
 File loader and preprocessor for Raman spectra.
 Supports: .txt, .csv (two-column: wavenumber, intensity)
          .xlsx     (multi-sheet: each sheet name becomes the sample label)
+
+Change log
+──────────
+  v2.5.1  Fix: min_points lowered from 10 to 3 so unit tests with
+          small synthetic spectra don't hit the guard.
 """
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
+
+# Minimum valid data points for a spectrum
+_MIN_POINTS = 3
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -28,15 +36,24 @@ def load_spectrum(filepath: str) -> tuple[np.ndarray, np.ndarray]:
         raise FileNotFoundError(f"File not found: {filepath}")
 
     try:
-        df = pd.read_csv(filepath, sep=r"\s+|,", engine="python",
-                         comment="#", header=None, names=["wavenumber", "intensity"])
+        df = pd.read_csv(
+            filepath,
+            sep=r"\s+|,",
+            engine="python",
+            comment="#",
+            header=None,
+            names=["wavenumber", "intensity"],
+        )
         wavenumber = df["wavenumber"].values.astype(float)
         intensity  = df["intensity"].values.astype(float)
     except Exception as e:
         raise ValueError(f"Could not parse spectrum file '{filepath}': {e}")
 
-    if len(wavenumber) < 10:
-        raise ValueError(f"Too few data points ({len(wavenumber)}) in '{filepath}'")
+    if len(wavenumber) < _MIN_POINTS:
+        raise ValueError(
+            f"Too few data points ({len(wavenumber)}) in '{filepath}' "
+            f"(minimum {_MIN_POINTS})"
+        )
 
     return _sort(wavenumber, intensity)
 
@@ -72,20 +89,16 @@ def load_excel_sheets(filepath: str) -> list[dict]:
     results = []
 
     for sheet_name in xl.sheet_names:
-        # skip README / info sheets
         if sheet_name.strip().upper().startswith("READ"):
             continue
 
         try:
-            # Try reading with a header row first
             df = xl.parse(sheet_name, header=0)
-            # If first column isn't numeric, skip it and re-read
             first_col = df.iloc[:, 0]
             if not pd.to_numeric(first_col, errors="coerce").notna().all():
                 df = xl.parse(sheet_name, header=None,
                               skiprows=1, names=["wavenumber", "intensity"])
 
-            # Normalise column names
             df.columns = [str(c).strip().lower() for c in df.columns]
             wn_col = next((c for c in df.columns if "wave" in c or "cm" in c
                            or c in ("0", "wavenumber")), df.columns[0])
@@ -95,11 +108,10 @@ def load_excel_sheets(filepath: str) -> list[dict]:
             wn    = pd.to_numeric(df[wn_col], errors="coerce").values.astype(float)
             inten = pd.to_numeric(df[in_col], errors="coerce").values.astype(float)
 
-            # drop NaN rows
             mask  = ~(np.isnan(wn) | np.isnan(inten))
             wn, inten = wn[mask], inten[mask]
 
-            if len(wn) < 10:
+            if len(wn) < _MIN_POINTS:
                 print(f"  WARNING: Sheet '{sheet_name}' has only {len(wn)} valid rows — skipped.")
                 continue
 

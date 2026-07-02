@@ -16,22 +16,24 @@ Change log
   v2.0   als_baseline (original)
   v2.5   arPLS_baseline added [Feature #7]
          auto_baseline() dispatcher added
+  v2.5.1 Fix: replaced legacy diags() call with np.diff(np.eye(n), 2)
+         compatible with scipy >= 1.11 (diags_array API change).
 """
 
 import numpy as np
-from scipy.sparse import diags, eye as speye
+from scipy.sparse import csc_matrix, diags, eye as speye
 from scipy.sparse.linalg import spsolve
 
 
 # ─────────────────────────────────────────────────────────
-# ALS baseline (original, unchanged)
+# ALS baseline (original — fixed for scipy >= 1.11)
 # ─────────────────────────────────────────────────────────
 def als_baseline(
     y: np.ndarray,
     lam: float = 1e5,
     p: float   = 0.01,
     niter: int = 10,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Asymmetric Least Squares baseline.
 
@@ -44,27 +46,26 @@ def als_baseline(
 
     Returns
     -------
-    baseline : 1-D array, same length as y
+    (corrected, baseline) : tuple of two 1-D arrays, same length as y
 
     Reference
     ---------
     Eilers & Boelens (2005) Baseline Correction with Asymmetric
     Least Squares Smoothing. Unpublished manuscript.
     """
-    n  = len(y)
-    D  = diags([1, -2, 1], [0, 1, 2], shape=(n - 2, n)).toarray()
-    D  = diags(D.flatten(), np.arange(-(n - 2), n), shape=(n - 2, n))
-    # Use scipy sparse correctly
-    from scipy.sparse import csc_matrix
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    # Second-difference matrix — works with all scipy versions
     D2 = csc_matrix(np.diff(np.eye(n), 2).T)
     H  = lam * D2.dot(D2.T)
     w  = np.ones(n)
+    z  = y.copy()
     for _ in range(niter):
-        W   = diags(w, 0)
-        Z   = W + H
-        z   = spsolve(Z, w * y)
-        w   = p * (y > z) + (1 - p) * (y <= z)
-    return z
+        W = diags(w, 0, format="csc")
+        Z = W + H
+        z = spsolve(Z, w * y)
+        w = p * (y > z) + (1 - p) * (y <= z)
+    return y - z, z
 
 
 # ─────────────────────────────────────────────────────────
@@ -72,10 +73,10 @@ def als_baseline(
 # ─────────────────────────────────────────────────────────
 def arPLS_baseline(
     y: np.ndarray,
-    lam: float  = 1e5,
+    lam: float   = 1e5,
     ratio: float = 1e-6,
-    niter: int  = 100,
-) -> np.ndarray:
+    niter: int   = 100,
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Asymmetrically Reweighted Penalised Least Squares baseline.
 
@@ -87,20 +88,20 @@ def arPLS_baseline(
 
     Parameters
     ----------
-    y     : intensity array (1-D, baseline-subtracted input)
+    y     : intensity array (1-D, raw input)
     lam   : smoothness penalty (1e4–1e7; larger = smoother baseline)
-    ratio : convergence criterion; stop when change < ratio × ||y||₂
+    ratio : convergence criterion; stop when change < ratio × ||z||₂
     niter : maximum iterations
 
     Returns
     -------
-    baseline : 1-D array, same length as y
+    (corrected, baseline) : tuple of two 1-D arrays, same length as y
 
     Recommended use cases
     ----------------------
-    • Graphene oxide (GO) — broad fluorescent background
-    • Reduced GO (rGO)   — partially quenched but still present
-    • g-C₃N₄             — strong visible fluorescence under 532 nm
+    • Graphene oxide (GO)       — broad fluorescent background
+    • Reduced GO (rGO)          — partially quenched but still present
+    • g-C₃N₄                   — strong visible fluorescence under 532 nm
     • Functionalized graphene with organic residues
 
     Reference
@@ -108,35 +109,31 @@ def arPLS_baseline(
     Baek et al. (2015) Analyst 140, 250–257.
     DOI: 10.1039/C4AN01061B
     """
-    from scipy.sparse import csc_matrix, diags as sp_diags
-    from scipy.sparse.linalg import spsolve as sp_solve
-
-    n   = len(y)
-    # Second-difference penalty matrix
-    D   = csc_matrix(np.diff(np.eye(n), 2))
-    H   = lam * D.dot(D.T)
-    w   = np.ones(n)
-    z   = y.copy().astype(float)
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    D  = csc_matrix(np.diff(np.eye(n), 2))
+    H  = lam * D.dot(D.T)
+    w  = np.ones(n)
+    z  = y.copy()
 
     for _ in range(niter):
-        W    = sp_diags(w, 0, format="csc")
-        Z    = W + H
-        z_new = sp_solve(Z, w * y)
-        d    = y - z_new
-        # Negative residuals (below current estimate) get weight → 1
-        # Positive residuals (peaks) get down-weighted toward 0
+        W     = diags(w, 0, format="csc")
+        Z     = W + H
+        z_new = spsolve(Z, w * y)
+        d     = y - z_new
         d_neg = d[d < 0]
         m_neg = d_neg.mean() if len(d_neg) > 0 else 0.0
         s_neg = d_neg.std()  if len(d_neg) > 0 else 1.0
-        w_new = 1.0 / (1.0 + np.exp(2.0 * (d - (2.0 * s_neg - m_neg)) / s_neg))
-        # Convergence check
+        if s_neg == 0.0:
+            s_neg = 1.0
+        w_new  = 1.0 / (1.0 + np.exp(2.0 * (d - (2.0 * s_neg - m_neg)) / s_neg))
         change = np.linalg.norm(z_new - z) / (np.linalg.norm(z) + 1e-12)
         z = z_new
         w = w_new
         if change < ratio:
             break
 
-    return z
+    return y - z, z
 
 
 # ─────────────────────────────────────────────────────────
@@ -166,12 +163,12 @@ def auto_baseline(
     """
     method = method.lower().replace("-", "").replace("_", "")
     if method == "als":
-        bl = als_baseline(y, **kwargs)
+        corrected, _ = als_baseline(y, **kwargs)
     elif method in ("arpls", "arplsbaseline"):
-        bl = arPLS_baseline(y, **kwargs)
+        corrected, _ = arPLS_baseline(y, **kwargs)
     else:
         raise ValueError(
             f"Unknown baseline method: {method!r}. "
             "Choose 'als' or 'arPLS'."
         )
-    return y - bl
+    return corrected
