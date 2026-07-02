@@ -2,6 +2,16 @@
 Baseline correction algorithms:
 1. Asymmetric Least Squares (ALS) — recommended for Raman
 2. Linear baseline between anchor points
+
+Note on negative residuals
+--------------------------
+``correct_baseline`` returns the raw intensity − baseline difference
+*without* clipping.  Negative values arise when the ALS baseline is
+slightly over-estimated and are physically meaningful: clipping them
+would (a) break the least-squares noise assumption required by peak
+fitting, (b) hide ALS over-subtraction silently, and (c) bias height
+and area of weak peaks upward.  Callers that need non-negative values
+for display purposes should clip the returned array themselves.
 """
 
 import numpy as np
@@ -57,7 +67,12 @@ def correct_baseline(wavenumber: np.ndarray,
                      **kwargs) -> tuple[np.ndarray, np.ndarray]:
     """
     Apply baseline correction.
+
     Returns: (corrected_intensity, baseline)
+
+    The corrected array is *not* clipped to zero.  Negative residuals
+    indicate local ALS over-subtraction and should be preserved so that
+    peak-fitting cost functions see unbiased noise on both sides of zero.
     """
     if method == "als":
         baseline  = als_baseline(intensity, **kwargs)
@@ -69,5 +84,5 @@ def correct_baseline(wavenumber: np.ndarray,
         raise ValueError(f"Unknown baseline method: '{method}'. Use 'als' or 'linear'.")
 
     corrected = intensity - baseline
-    corrected = np.clip(corrected, 0, None)   # no negative intensities
+    # NOTE: do NOT clip here — see module docstring.
     return corrected, baseline
