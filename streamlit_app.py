@@ -4,11 +4,19 @@ Author: Hoda Jaafari
 Run:    streamlit run streamlit_app.py
 
 Supported materials:
-  - Graphene / sp2 carbon (D, G, D', 2D, D+G)
+  - Graphene / sp2 carbon (D, G, D', 2D, D+G, D*)
   - MoS2, WS2, MoSe2, WSe2, MoTe2  (TMDs)
   - h-BN
   - Black Phosphorus
   - MXene
+
+v2.4 / v2.5 UI sync:
+  - D* band (I_D*/I_G + C/O note)             [Lee 2021]
+  - B-doping fingerprint flag                  [Kim 2012]
+  - Fitting uncertainty (center ± σ, FWHM ± σ)[Feature #3]
+  - Doping level estimator (n/p + carrier density) [Pisana 2007]
+  - Refined stage boundary (FWHM(G) + A_D/A_G)[Wu 2018]
+  - Batch statistics + ratio heatmap           [Roadmap #10]
 """
 
 import io
@@ -20,6 +28,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -55,7 +64,7 @@ MATERIAL_GROUPS = {
 
 MATERIAL_PEAK_WINDOWS = {
     "graphene": {
-        "D":  (1270, 1450), "G": (1500, 1600),
+        "D*": (1080, 1230), "D":  (1270, 1450), "G": (1500, 1600),
         "D'": (1610, 1680), "2D": (2580, 2780), "D+G": (2850, 2960),
     },
     "mos2":  {"E2g": (370, 395),  "A1g": (398, 420)},
@@ -68,15 +77,30 @@ MATERIAL_PEAK_WINDOWS = {
     "mxene": {"D":  (1270, 1450), "G": (1500, 1600)},
 }
 
+# v2.4: D* colour added, D' key fixed
 PEAK_COLORS_GRAPHENE = {
-    "D": "#ff6b6b", "G": "#69db7c", "D'": "#ffa94d",
-    "2D": "#4fc3f7", "D+G": "#cc99ff",
+    "D_star": "#e8b4f8",
+    "D":      "#ff6b6b",
+    "G":      "#69db7c",
+    "D_prime":"#ffa94d",
+    "D'":     "#ffa94d",
+    "2D":     "#4fc3f7",
+    "DG":     "#cc99ff",
+    "D+G":    "#cc99ff",
 }
 PEAK_COLORS_TMD = {
     "E2g": "#4fc3f7", "A1g": "#ff6b6b", "2LA": "#ffa94d",
     "B2g": "#cc99ff", "Ag1": "#69db7c", "Ag2": "#4fc3f7",
     "A1g_E2g": "#ff6b6b",
 }
+
+# Ratios shown in batch heatmap (must be numeric-castable)
+HEATMAP_RATIO_KEYS = [
+    "ID/IG (height)", "ID/IG (area)",
+    "I2D/IG (height)", "I2D/IG (area)",
+    "ID'/IG (height)", "ID/ID' (height)",
+    "ID*/IG (height)", "L_D (nm)",
+]
 
 
 # ══════════════════════════════════════════════════════════
@@ -143,7 +167,7 @@ def _parse_sheet_data(xl, sheet_name: str) -> tuple:
         if len(candidate) >= 10:
             return candidate["wavenumber"].values, candidate["intensity"].values
 
-    # --- Strategy 2: scan all rows for first numeric pair (any two-col layout) ---
+    # --- Strategy 2: scan all rows for first numeric pair ---
     for start in range(df.shape[0]):
         for col_pair in [(1, 2), (0, 1)]:
             if df.shape[1] > col_pair[1]:
@@ -160,7 +184,7 @@ def _parse_sheet_data(xl, sheet_name: str) -> tuple:
 
 
 # ══════════════════════════════════════════════════════════
-#  PEAK FITTING — GENERIC
+#  PEAK FITTING — GENERIC (TMD / h-BN / BP)
 # ══════════════════════════════════════════════════════════
 from scipy.optimize import curve_fit
 
@@ -174,14 +198,15 @@ def fit_single_peak(wn, intensity, lo, hi, name):
     xd, yd = wn[mask], intensity[mask]
     result = {"name": name, "found": False, "center": np.nan,
               "amplitude": np.nan, "fwhm": np.nan, "area": np.nan,
-              "r2": np.nan, "x": xd, "y_fit": np.zeros_like(xd)}
+              "r2": np.nan, "x": xd, "y_fit": np.zeros_like(xd),
+              "center_stderr": None, "fwhm_stderr": None}
     if len(xd) < 5 or yd.max() < 1:
         return result
     try:
         c0  = xd[np.argmax(yd)]
         g0  = (hi - lo) / 8.0
         a0  = yd.max() * np.pi * g0
-        popt, _ = curve_fit(
+        popt, pcov = curve_fit(
             _lorentzian, xd, yd,
             p0=[c0, a0, g0],
             bounds=([lo, 0, 0.5], [hi, np.inf, (hi - lo) / 2])
@@ -190,6 +215,9 @@ def fit_single_peak(wn, intensity, lo, hi, name):
         ss_res = np.sum((yd - y_fit) ** 2)
         ss_tot = np.sum((yd - yd.mean()) ** 2)
         r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        # stderr from pcov
+        c_std = float(np.sqrt(pcov[0, 0])) if np.isfinite(pcov[0, 0]) and pcov[0, 0] >= 0 else None
+        g_std = float(np.sqrt(pcov[2, 2])) if np.isfinite(pcov[2, 2]) and pcov[2, 2] >= 0 else None
         result.update({
             "found": r2 > 0.65,
             "center": popt[0],
@@ -198,6 +226,8 @@ def fit_single_peak(wn, intensity, lo, hi, name):
             "area": popt[1],
             "r2": r2,
             "y_fit": y_fit,
+            "center_stderr": c_std,
+            "fwhm_stderr": (2.0 * g_std) if g_std is not None else None,
         })
     except Exception:
         pass
@@ -213,31 +243,41 @@ def fit_material_peaks(wn, intensity, mat_key):
 # ══════════════════════════════════════════════════════════
 #  MATERIAL ANALYSIS
 # ══════════════════════════════════════════════════════════
-def _graphitization(id_ig):
-    try:
-        id_ig = float(id_ig)
-        if math.isnan(id_ig):
-            return "N/A"
-        return f"{max(0.0, (1.0 - id_ig) * 100.0):.1f} %"
-    except Exception:
-        return "N/A"
-
-
 def analyze_graphene(peaks, laser_nm):
+    """
+    Build the analysis dict surfaced in the UI.
+    v2.4/v2.5: includes D*, B-doping, doping estimator, refined stage.
+    """
     result = analyze(peaks, laser_nm=laser_nm)
-    return {
-        "ID/IG (height)":   _fv(result.ID_IG_height),
-        "ID/IG (area)":     _fv(result.ID_IG_area),
-        "I2D/IG (height)":  _fv(result.I2D_IG_height),
-        "I2D/IG (area)":    _fv(result.I2D_IG_area),
-        "ID'/IG (height)":  _fv(result.IDp_IG_height),
-        "ID/ID' (height)":  _fv(result.ID_IDp_height),
-        "L_D (nm)":         _fv(result.L_D_nm, ".2f"),
-        "Disorder Stage":   result.disorder_stage,
-        "Defect Type":      result.defect_type,
-        "Estimated Layers": result.estimated_layers,
-        "Graphitization %": _graphitization(result.ID_IG_height),
+    out = {
+        # ── Core ratios ────────────────────────────────
+        "ID/IG (height)":      _fv(result.ID_IG_height),
+        "ID/IG (area)":        _fv(result.ID_IG_area),
+        "I2D/IG (height)":     _fv(result.I2D_IG_height),
+        "I2D/IG (area)":       _fv(result.I2D_IG_area),
+        "ID'/IG (height)":     _fv(result.IDp_IG_height),
+        "ID/ID' (height)":     _fv(result.ID_IDp_height),
+        # ── v2.4: D* band ─────────────────────────────
+        "ID*/IG (height)":     _fv(result.IDstar_IG_height),
+        "D* C/O Note":         result.dstar_co_note if result.dstar_co_note else "—",
+        # ── v2.4: B-doping fingerprint ─────────────────
+        "⚠ B-Doping Flag":    ("YES ← " + result.boron_doping_note)
+                                if result.boron_doping_flag else "No",
+        # ── v2.5: doping estimator ─────────────────────
+        "Doping Type":         result.doping_type,
+        "|n| (cm⁻²)":         _fv(result.carrier_density_cm2, ".3e"),
+        "Doping Note":         result.doping_note if result.doping_note else "—",
+        # ── v2.5: refined stage boundary ──────────────
+        "Stage Refined":       result.stage_refined,
+        "Stage Refined Note":  result.stage_refined_note if result.stage_refined_note else "—",
+        # ── Structural ────────────────────────────────
+        "L_D (nm)":            _fv(result.L_D_nm, ".2f"),
+        "L_D Note":            result.L_D_note if result.L_D_note else "—",
+        "Disorder Stage":      result.disorder_stage,
+        "Defect Type":         result.defect_type,
+        "Estimated Layers":    result.estimated_layers,
     }
+    return out
 
 
 def analyze_tmd(peaks, mat_key, laser_nm):
@@ -271,7 +311,7 @@ def analyze_tmd(peaks, mat_key, laser_nm):
         e2g = peaks.get("E2g") or peaks.get("A1g_E2g")
         if e2g and e2g["found"]:
             res["Main peak center (cm-1)"] = f"{e2g['center']:.1f}"
-            res["Main peak FWHM (cm-1)"]  = f"{e2g['fwhm']:.1f}"
+            res["Main peak FWHM (cm-1)"]   = f"{e2g['fwhm']:.1f}"
         b2g = peaks.get("B2g")
         if b2g and b2g["found"]:
             res["B2g center (cm-1)"] = f"{b2g['center']:.1f}"
@@ -318,11 +358,20 @@ def run_analysis(wn, intensity, mat_key, group, laser_nm,
         peaks_dict = {}
         for k, p in peaks_raw.items():
             peaks_dict[k] = {
-                "name": p.name, "found": p.found,
-                "center": p.center, "amplitude": p.amplitude,
-                "fwhm": p.fwhm, "area": p.area, "r2": p.r_squared,
-                "x": p.model_x, "y_fit": p.model_y,
-                "is_split_2D": getattr(p, "is_split_2D", False),
+                "name":           p.name,
+                "found":          p.found,
+                "center":         p.center,
+                "amplitude":      p.amplitude,
+                "fwhm":           p.fwhm,
+                "area":           p.area,
+                "r2":             p.r_squared,
+                "x":              p.model_x,
+                "y_fit":          p.model_y,
+                "is_split_2D":    getattr(p, "is_split_2D",    False),
+                "is_deconvolved": getattr(p, "is_deconvolved", False),
+                # v2.4 Feature #3: fitting uncertainty
+                "center_stderr":  getattr(p, "center_stderr", None),
+                "fwhm_stderr":    getattr(p, "fwhm_stderr",   None),
             }
         analysis = analyze_graphene(peaks_raw, laser_nm)
     else:
@@ -333,6 +382,107 @@ def run_analysis(wn, intensity, mat_key, group, laser_nm,
         elif mat_key == "bp":  analysis = analyze_bp(peaks_dict)
         else: analysis = {}
     return peaks_dict, analysis, corrected, baseline_arr
+
+
+# ══════════════════════════════════════════════════════════
+#  BATCH STATISTICS HELPERS  (Roadmap #10)
+# ══════════════════════════════════════════════════════════
+def _build_numeric_df(samples_results, ratio_keys=None):
+    """
+    Build a DataFrame of numeric ratio values across all samples.
+    Rows = samples, columns = ratio keys that could be cast to float.
+    """
+    if ratio_keys is None:
+        ratio_keys = HEATMAP_RATIO_KEYS
+    rows = []
+    for sr in samples_results:
+        row = {"Sample": sr["name"]}
+        for k in ratio_keys:
+            v = sr["analysis"].get(k, "N/A")
+            try:
+                row[k] = float(v)
+            except (ValueError, TypeError):
+                row[k] = np.nan
+        rows.append(row)
+    df = pd.DataFrame(rows).set_index("Sample")
+    # Drop columns that are ALL NaN
+    df = df.dropna(axis=1, how="all")
+    return df
+
+
+def _ratio_heatmap(df_num: pd.DataFrame) -> go.Figure:
+    """Plotly annotated heatmap of ratio values."""
+    z      = df_num.values.astype(float)
+    labels = df_num.columns.tolist()
+    rows   = df_num.index.tolist()
+
+    # Normalise each column (0→1) for colour scale; keep raw for text
+    z_norm = np.zeros_like(z)
+    for ci in range(z.shape[1]):
+        col = z[:, ci]
+        valid = col[~np.isnan(col)]
+        if len(valid) > 1 and (valid.max() - valid.min()) > 0:
+            z_norm[:, ci] = (col - valid.min()) / (valid.max() - valid.min())
+        else:
+            z_norm[:, ci] = 0.5
+
+    # Annotation text: raw value (2 decimal places) or "N/A"
+    text = []
+    for ri in range(z.shape[0]):
+        row_txt = []
+        for ci in range(z.shape[1]):
+            row_txt.append(f"{z[ri, ci]:.3f}" if not np.isnan(z[ri, ci]) else "N/A")
+        text.append(row_txt)
+
+    fig = go.Figure(go.Heatmap(
+        z=z_norm,
+        x=labels,
+        y=rows,
+        text=text,
+        texttemplate="%{text}",
+        colorscale="RdYlGn",
+        showscale=True,
+        colorbar=dict(title="Normalised", tickvals=[0, 0.5, 1],
+                      ticktext=["Low", "Mid", "High"]),
+        hoverongaps=False,
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        height=max(280, 80 + 50 * len(rows)),
+        xaxis=dict(side="top", tickangle=-30),
+        yaxis=dict(autorange="reversed"),
+        margin=dict(t=120, b=40, l=120, r=40),
+        title=dict(text="Raman Ratio Heatmap — batch overview", font=dict(size=13)),
+    )
+    return fig
+
+
+def _ratio_bar_chart(df_num: pd.DataFrame, ratio_key: str) -> go.Figure:
+    """Bar chart for a single ratio across all samples."""
+    palette = ["#4fc3f7","#69db7c","#ff6b6b","#ffa94d",
+               "#cc99ff","#ffd43b","#a9e34b","#f783ac"]
+    fig = go.Figure()
+    vals = df_num[ratio_key].values if ratio_key in df_num.columns else np.array([])
+    names = df_num.index.tolist()
+    for i, (n, v) in enumerate(zip(names, vals)):
+        fig.add_trace(go.Bar(
+            x=[n], y=[v] if not np.isnan(v) else [0],
+            name=n,
+            marker_color=palette[i % len(palette)],
+            showlegend=False,
+        ))
+    fig.update_layout(
+        template="plotly_dark", height=320,
+        title=dict(text=ratio_key, font=dict(size=12)),
+        xaxis_title="Sample",
+        yaxis_title=ratio_key,
+        margin=dict(t=50, b=60, l=60, r=20),
+    )
+    return fig
+
+
+def _numeric_df_to_csv(df_num: pd.DataFrame) -> bytes:
+    return df_num.reset_index().to_csv(index=False).encode("utf-8")
 
 
 # ══════════════════════════════════════════════════════════
@@ -451,7 +601,7 @@ def build_excel_report(samples_results, laser_nm):
     ws_sum.merge_cells("B3:J3")
     ws_sum["B3"] = (
         f"Laser: {laser_nm:.0f} nm  |  Samples: {len(samples_results)}  |  "
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  v2.5"
     )
     ws_sum["B3"].font = Font(name="Calibri", size=10, color="7F7F7F", italic=True)
     ws_sum["B3"].alignment = C
@@ -504,7 +654,7 @@ def build_excel_report(samples_results, laser_nm):
         ws["B2"].alignment = C
         ws.row_dimensions[2].height = 28
         ws.merge_cells("B3:G3")
-        ws["B3"] = f"Material: {sr['material']}  |  Group: {sr['group']}  |  Laser: {laser_nm:.0f} nm"
+        ws["B3"] = f"Material: {sr['material']}  |  Group: {sr['group']}  |  Laser: {laser_nm:.0f} nm  |  v2.5"
         ws["B3"].font = Font(name="Calibri", size=10, color="7F7F7F", italic=True)
         ws["B3"].alignment = C
 
@@ -532,24 +682,32 @@ def build_excel_report(samples_results, laser_nm):
         ws.cell(row=pk_start, column=2, value="Fitted Peaks").font = Font(
             name="Calibri", bold=True, color="1F4E79", size=13)
         ws.row_dimensions[pk_start].height = 22
-        for ci, h in enumerate(["Peak", "Center (cm-1)", "FWHM (cm-1)",
-                                  "Height (a.u.)", "Area (a.u.)", "R2"]):
+        pk_headers = ["Peak", "Center (cm-1)", "±σ Center", "FWHM (cm-1)", "±σ FWHM",
+                      "Height (a.u.)", "Area (a.u.)", "R²"]
+        for ci, h in enumerate(pk_headers):
             cell = ws.cell(row=pk_start+1, column=2+ci, value=h)
             cell.font = H; cell.fill = SF; cell.alignment = C; cell.border = brd()
         for ri, (pname, p) in enumerate(sr["peaks"].items()):
             r   = pk_start + 2 + ri
             alt = PatternFill("solid", fgColor="D6E4F0" if ri % 2 == 0 else "EBF3FB")
-            for ci in range(6):
+            for ci in range(len(pk_headers)):
                 ws.cell(row=r, column=2+ci).fill = alt
                 ws.cell(row=r, column=2+ci).border = brd()
             ws.cell(row=r, column=2, value=p["name"]).font = B
             ws.cell(row=r, column=2).alignment = L
             if p["found"]:
-                for ci, v in enumerate([
-                    round(float(p["center"]), 2), round(float(p["fwhm"]), 2),
-                    round(float(p["amplitude"]), 1), round(float(p["area"]), 1),
-                    round(float(p["r2"]), 4)
-                ]):
+                c_std  = p.get("center_stderr")
+                f_std  = p.get("fwhm_stderr")
+                vals   = [
+                    round(float(p["center"]), 2),
+                    round(float(c_std), 3) if c_std is not None else "—",
+                    round(float(p["fwhm"]), 2),
+                    round(float(f_std), 3) if f_std is not None else "—",
+                    round(float(p["amplitude"]), 1),
+                    round(float(p["area"]), 1),
+                    round(float(p["r2"]), 4),
+                ]
+                for ci, v in enumerate(vals):
                     ws.cell(row=r, column=3+ci, value=v).font = N
                     ws.cell(row=r, column=3+ci).alignment = C
             else:
@@ -593,7 +751,7 @@ st.set_page_config(
 
 with st.sidebar:
     st.title("🔬 Raman Analyzer")
-    st.caption("Graphene · TMDs · h-BN · BP · MXene")
+    st.caption("Graphene · TMDs · h-BN · BP · MXene · v2.5")
     st.divider()
 
     st.subheader("🔴 Laser Wavelength")
@@ -637,7 +795,7 @@ with st.sidebar:
     )
 
 st.title("Raman Spectrum Analyzer — 2D Materials")
-st.caption("Graphene / rGO / GO / TMDs / h-BN / Black Phosphorus / MXene")
+st.caption("Graphene / rGO / GO / TMDs / h-BN / Black Phosphorus / MXene  •  v2.5")
 
 if uploaded is None:
     st.info("👈  Download the template (Step 1), fill it in, then upload it (Step 2).")
@@ -652,6 +810,15 @@ if uploaded is None:
 - From **row 4** onward: Wavenumber in column B, Intensity in column C
 
 **Step 4** — Upload the filled file → configure material for each sample → **RUN ANALYSIS**
+
+---
+**v2.4 / v2.5 features now in UI:**
+- 🔬 D* band quantification (I_D*/I_G, C/O ratio proxy) [Lee 2021]
+- ⚠️ B-doping fingerprint auto-detection [Kim 2012]
+- 📐 Fitting uncertainty — center ± σ, FWHM ± σ [pcov]
+- ⚡ Doping level estimator (n/p-type + carrier density) [Pisana 2007]
+- 🔀 Refined stage boundary (FWHM(G) + A_D/A_G) [Wu 2018]
+- 📊 Batch statistics + ratio heatmap [Roadmap #10]
         """)
     st.stop()
 
@@ -665,6 +832,7 @@ except Exception as e:
 if not sheets:
     st.error("No data sheets found. Make sure your file has sheets with sample data.")
     st.stop()
+
 
 def read_sample_name_from_sheet(xl, sheet):
     """Read custom name from cell B2 (index [1,1]); fall back to sheet title."""
@@ -744,8 +912,6 @@ samples_results, errors = [], []
 
 for i, cfg in enumerate(configs):
     try:
-        # _parse_sheet_data handles template layout correctly:
-        # skips rows 1-3 (label/name/header), reads cols B & C (index 1 & 2)
         wn, intensity = _parse_sheet_data(xl, cfg["sheet"])
         sort_idx      = np.argsort(wn)
         wn, intensity = wn[sort_idx], intensity[sort_idx]
@@ -776,13 +942,15 @@ if not samples_results:
 st.success(f"✅  {len(samples_results)} sample(s) analysed!")
 
 # ── Result tabs ───────────────────────────────────────────
-tab_objects = st.tabs(
-    ["📈 All Spectra", "🔍 Peak Fits", "📋 Results Table"] +
-    [f"📄 {sr['name']}" for sr in samples_results]
+tab_labels = (
+    ["📈 All Spectra", "🔍 Peak Fits", "📋 Results Table", "📊 Batch Statistics"]
+    + [f"📄 {sr['name']}" for sr in samples_results]
 )
+tab_objects = st.tabs(tab_labels)
 palette = ["#4fc3f7","#69db7c","#ff6b6b","#ffa94d",
            "#cc99ff","#ffd43b","#a9e34b","#f783ac"]
 
+# ── Tab 0: All Spectra ────────────────────────────────────
 with tab_objects[0]:
     st.subheader("All Spectra — Baseline Corrected")
     fig_all = go.Figure()
@@ -794,12 +962,13 @@ with tab_objects[0]:
         ))
     fig_all.update_layout(
         template="plotly_dark", height=450,
-        xaxis_title="Raman Shift (cm-1)",
+        xaxis_title="Raman Shift (cm⁻¹)",
         yaxis_title="Intensity (a.u.)",
         legend=dict(orientation="h", y=1.08),
     )
     st.plotly_chart(fig_all, use_container_width=True)
 
+# ── Tab 1: Peak Fits ──────────────────────────────────────
 with tab_objects[1]:
     st.subheader("Peak Fits")
     sel_name = st.selectbox("Select sample", [sr["name"] for sr in samples_results],
@@ -816,6 +985,15 @@ with tab_objects[1]:
             color = colors.get(key, "#cccccc")
             mask  = (sr_sel["wn"] >= p["x"][0]) & (sr_sel["wn"] <= p["x"][-1])
             xd, yd = sr_sel["wn"][mask], sr_sel["corrected"][mask]
+
+            # v2.4 Feature #3: show stderr if available
+            ctr_str  = f"{p['center']:.1f}"
+            if p.get("center_stderr") is not None:
+                ctr_str += f" ± {p['center_stderr']:.1f}"
+            fwhm_str = f"{p['fwhm']:.1f}"
+            if p.get("fwhm_stderr") is not None:
+                fwhm_str += f" ± {p['fwhm_stderr']:.1f}"
+
             fig_pk = go.Figure()
             fig_pk.add_trace(go.Scatter(
                 x=xd, y=yd, mode="markers",
@@ -828,20 +1006,24 @@ with tab_objects[1]:
                 fillcolor=f"rgba({','.join(str(int(color.lstrip('#')[j:j+2],16)) for j in (0,2,4))},0.15)",
                 name="Fit"
             ))
-            split = " [dual-L]" if p.get("is_split_2D") else ""
+            split   = " [dual-L]"  if p.get("is_split_2D")    else ""
+            deconv  = " [deconv]"  if p.get("is_deconvolved") else ""
             fig_pk.update_layout(
                 title=dict(
-                    text=f"<b style='color:{color}'>{p['name']}{split}</b><br>"
-                         f"{p['center']:.1f} cm-1  FWHM={p['fwhm']:.1f}  R²={p['r2']:.3f}",
-                    font=dict(size=11)
+                    text=(
+                        f"<b style='color:{color}'>{p['name']}{split}{deconv}</b><br>"
+                        f"Center: {ctr_str} cm⁻¹  |  FWHM: {fwhm_str} cm⁻¹  |  R²={p['r2']:.3f}"
+                    ),
+                    font=dict(size=10)
                 ),
-                template="plotly_dark", height=280, showlegend=False,
-                margin=dict(t=80,b=40,l=40,r=10),
-                xaxis_title="Raman Shift (cm-1)",
+                template="plotly_dark", height=290, showlegend=False,
+                margin=dict(t=85, b=40, l=40, r=10),
+                xaxis_title="Raman Shift (cm⁻¹)",
                 yaxis_title="Intensity",
             )
             cols_pk[idx % 3].plotly_chart(fig_pk, use_container_width=True)
 
+# ── Tab 2: Results Table ──────────────────────────────────
 with tab_objects[2]:
     st.subheader("Results Summary")
     all_pk, seen_k = [], set()
@@ -855,24 +1037,87 @@ with tab_objects[2]:
         for k in all_pk:
             row[k] = sr["analysis"].get(k, "—")
         rows.append(row)
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    df_results = pd.DataFrame(rows)
+    st.dataframe(df_results, hide_index=True, use_container_width=True)
 
+# ── Tab 3: Batch Statistics + Heatmap (Roadmap #10) ──────
+with tab_objects[3]:
+    st.subheader("📊 Batch Statistics — Ratio Heatmap")
+
+    graphene_samples = [sr for sr in samples_results if sr["mat_key"] in ("graphene", "mxene")]
+
+    if len(graphene_samples) < 2:
+        st.info("Batch statistics require ≥ 2 graphene/sp² carbon samples. "
+                "Non-graphene materials are excluded from ratio heatmap.")
+    else:
+        df_num = _build_numeric_df(graphene_samples)
+
+        if df_num.empty or df_num.shape[1] == 0:
+            st.warning("No numeric ratio data available for the loaded samples.")
+        else:
+            # ── Heatmap ───────────────────────────────────
+            st.markdown("#### Ratio Heatmap — all samples × all numeric ratios")
+            st.caption(
+                "Colour is **column-normalised** (low→red, high→green). "
+                "Cell values show raw ratio numbers."
+            )
+            fig_hm = _ratio_heatmap(df_num)
+            st.plotly_chart(fig_hm, use_container_width=True)
+
+            # ── Per-ratio bar chart ───────────────────────
+            st.markdown("#### Per-Ratio Bar Chart")
+            ratio_choices = [c for c in df_num.columns if c in HEATMAP_RATIO_KEYS]
+            if not ratio_choices:
+                ratio_choices = df_num.columns.tolist()
+
+            sel_ratio = st.selectbox(
+                "Select ratio to plot", ratio_choices, key="batch_ratio_sel"
+            )
+            fig_bar = _ratio_bar_chart(df_num, sel_ratio)
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # ── Descriptive stats table ───────────────────
+            st.markdown("#### Descriptive Statistics")
+            stats = df_num.describe().T.round(4)
+            stats.index.name = "Ratio"
+            st.dataframe(stats, use_container_width=True)
+
+            # ── CSV download ──────────────────────────────
+            csv_bytes = _numeric_df_to_csv(df_num)
+            st.download_button(
+                label="⬇️  Download Numeric Ratios (CSV)",
+                data=csv_bytes,
+                file_name=f"raman_batch_ratios_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    # All materials: show text stats for non-graphene too
+    if len(samples_results) > len(graphene_samples):
+        with st.expander("🔍 Non-graphene sample parameters"):
+            other = [sr for sr in samples_results if sr["mat_key"] not in ("graphene","mxene")]
+            for sr in other:
+                st.markdown(f"**{sr['name']}** ({sr['material']})")
+                st.json(sr["analysis"])
+
+# ── Per-sample tabs ───────────────────────────────────────
 for ti, sr in enumerate(samples_results):
-    with tab_objects[3 + ti]:
+    with tab_objects[4 + ti]:
         st.subheader(f"{sr['name']} — {sr['material']}")
+
         fig_s = make_subplots(rows=2, cols=1,
-                               subplot_titles=("Raw + Baseline", "Corrected"),
+                               subplot_titles=("Raw + Baseline", "Corrected + peak positions"),
                                vertical_spacing=0.12)
         fig_s.add_trace(go.Scatter(x=sr["wn"], y=sr["intensity"],
-                                    name="Raw", line=dict(color="#4fc3f7",width=1.2)),
+                                    name="Raw", line=dict(color="#4fc3f7", width=1.2)),
                          row=1, col=1)
         fig_s.add_trace(go.Scatter(x=sr["wn"], y=sr["baseline"],
                                     name="Baseline",
-                                    line=dict(color="#ff6b6b",width=1.5,dash="dash")),
+                                    line=dict(color="#ff6b6b", width=1.5, dash="dash")),
                          row=1, col=1)
         fig_s.add_trace(go.Scatter(x=sr["wn"], y=sr["corrected"],
                                     name="Corrected",
-                                    line=dict(color="#69db7c",width=1.4),
+                                    line=dict(color="#69db7c", width=1.4),
                                     fill="tozeroy",
                                     fillcolor="rgba(105,219,124,0.07)"),
                          row=2, col=1)
@@ -889,30 +1134,66 @@ for ti, sr in enumerate(samples_results):
                     showarrow=False, row=2, col=1
                 )
         fig_s.update_layout(
-            height=550, template="plotly_dark",
-            title=dict(text=f"{sr['name']} | laser={laser_nm:.0f} nm",
+            height=580, template="plotly_dark",
+            title=dict(text=f"{sr['name']} | laser={laser_nm:.0f} nm  [v2.5]",
                         font=dict(size=13)),
             legend=dict(orientation="h", y=1.06),
         )
-        fig_s.update_xaxes(title_text="Raman Shift (cm-1)", row=2, col=1)
+        fig_s.update_xaxes(title_text="Raman Shift (cm⁻¹)", row=2, col=1)
         fig_s.update_yaxes(title_text="Intensity (a.u.)")
         st.plotly_chart(fig_s, use_container_width=True)
 
-        st.subheader("Analysis Parameters")
+        # ── Analysis parameters table ─────────────────
+        st.subheader("Analysis Parameters  (v2.5)")
+
+        # Highlight special fields
+        def _row_style(row):
+            if "B-Doping" in str(row.get("Parameter", "")) and "YES" in str(row.get("Value", "")):
+                return ["background-color: #3d1a1a; color: #ff9999"] * 2
+            if "Stage Refined" in str(row.get("Parameter", "")) and "Stage 2" in str(row.get("Value", "")):
+                return ["background-color: #2a2a1a; color: #ffd43b"] * 2
+            if "Doping Type" in str(row.get("Parameter", "")):
+                return ["background-color: #1a2a2a; color: #69db7c"] * 2
+            return [""] * 2
+
+        df_params = pd.DataFrame(
+            [{"Parameter": k, "Value": v} for k, v in sr["analysis"].items()]
+        )
         st.dataframe(
-            pd.DataFrame([{"Parameter": k, "Value": v}
-                           for k, v in sr["analysis"].items()]),
+            df_params.style.apply(_row_style, axis=1),
             hide_index=True, use_container_width=True
         )
 
+        # ── Fitted peak table ─────────────────────────
+        st.subheader("Fitted Peaks (with ± uncertainty)")
+        pk_rows = []
+        for k, p in sr["peaks"].items():
+            if p["found"]:
+                c_std = p.get("center_stderr")
+                f_std = p.get("fwhm_stderr")
+                pk_rows.append({
+                    "Peak":         p["name"],
+                    "Center (cm⁻¹)": f"{p['center']:.2f}" + (f" ± {c_std:.2f}" if c_std else ""),
+                    "FWHM (cm⁻¹)":   f"{p['fwhm']:.2f}"  + (f" ± {f_std:.2f}" if f_std else ""),
+                    "Height":        f"{p['amplitude']:.1f}",
+                    "Area":          f"{p['area']:.1f}",
+                    "R²":            f"{p['r2']:.4f}",
+                    "Notes":         ("dual-L" if p.get("is_split_2D") else "") +
+                                     ("deconv" if p.get("is_deconvolved") else ""),
+                })
+        if pk_rows:
+            st.dataframe(pd.DataFrame(pk_rows), hide_index=True, use_container_width=True)
+        else:
+            st.info("No peaks detected in this sample.")
+
 # ── Excel export ──────────────────────────────────────────
 st.divider()
-st.subheader("📊 Download Full Excel Report")
+st.subheader("📊 Download Full Excel Report  (v2.5)")
 excel_bytes = build_excel_report(samples_results, laser_nm)
 st.download_button(
     label="⬇️  Download Excel Report",
     data=excel_bytes,
-    file_name=f"raman_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+    file_name=f"raman_report_v25_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
     type="primary",
