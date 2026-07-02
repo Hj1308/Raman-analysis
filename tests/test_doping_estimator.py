@@ -11,6 +11,7 @@ Logic in analyzer._estimate_doping:
   - delta_G >= +3 cm^-1, I2D/IG >= 0.5 -> p-type
   - carrier density from: n = (|delta_G| / alpha)^2
     where alpha = 2.2e-12 cm^-1 per (cm^-2)^0.5
+    (returned as raw cm^-2, NOT divided by 1e12)
 
 Tests:
   1. Undoped: G at 1582 (no shift)
@@ -115,16 +116,18 @@ class TestCarrierDensity:
 
     def test_carrier_density_formula(self):
         """
-        Manual calculation: n = (|delta_G| / alpha)^2
-        where alpha = _ALPHA_PISANA = 2.2e-12 cm^-1/(cm^-2)^0.5
+        Manual calculation matching analyzer._estimate_doping:
+          n_abs = (|delta_G| / _ALPHA_PISANA) ** 2
+        carrier_density_cm2 is stored as n_abs (raw cm^-2, not /1e12).
         """
         delta = 10.0
         peaks = {"G": _make_G(_G0_UNDOPED + delta)}
         analysis = analyze(peaks, laser_nm=532.0)
         expected_n = (delta / _ALPHA_PISANA) ** 2
         rel_err = abs(analysis.carrier_density_cm2 - expected_n) / expected_n
-        assert rel_err < 1e-9, "Carrier density formula mismatch: {:.3e} vs {:.3e}".format(
-            analysis.carrier_density_cm2, expected_n
+        assert rel_err < 1e-9, (
+            "Carrier density formula mismatch: {:.3e} vs {:.3e}".format(
+                analysis.carrier_density_cm2, expected_n)
         )
 
     def test_carrier_density_increases_with_shift(self):
