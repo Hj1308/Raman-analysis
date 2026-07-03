@@ -62,18 +62,21 @@ The 1524–1709 cm⁻¹ region of 6H-SiC second-order bands directly overlaps G.
 
 ---
 
-### 1.4 LOPC coupling — nitrogen-doped SiC (g-NBSiC) 🔴 P1
+### 1.4 LOPC coupling — heavily doped SiC 🔴 P1
 
-In N-doped 6H-SiC the A₁(LO) mode couples with conduction-band plasmons forming
-the **LO phonon–plasmon coupled (LOPC) mode**. Its frequency shifts upward from
-967 cm⁻¹ depending on carrier concentration. The current code fits a fixed
-Lorentzian at 967 cm⁻¹ — this fails for g-NBSiC and contaminates the G-band fit.
+In heavily doped 6H-SiC the A₁(LO) mode can couple with free carriers,
+forming a **LO phonon–plasmon coupled (LOPC) mode**. Its frequency shifts
+away from the nominal ~964–967 cm⁻¹ depending on carrier concentration.
+A fixed Lorentzian at ~967 cm⁻¹ is therefore insufficient in these cases
+and can contaminate nearby interpretation windows.
 
-**Action:** Detect LOPC shift in the 900–1100 cm⁻¹ window.
-If the peak is > 975 cm⁻¹, flag `lopc_active = True` and adjust substrate subtraction.
+**Action:**
+- detect LOPC-like shifts in the ~900–1100 cm⁻¹ window
+- if the peak is significantly displaced from the nominal LO position,
+  flag `lopc_active = True`
+- integrate this with future SiC-subtraction logic
 
-> Reference: Lin et al. 2012, §3 (carrier concentration → LO peak shift)
-
+  
 ---
 
 ## 2 — New Features (Unique Scientific Value)
@@ -154,13 +157,15 @@ before doing any graphene analysis (critical for correct subtraction template).
 
 ---
 
-### 2.6 Impurity doping detection via LOPC frequency 🟠 P2
+### 2.6 Impurity-related carrier concentration via LOPC 🟠 P2
 
-From Lin et al. 2012: the LO peak shift correlates with carrier concentration.
-N-doping shifts A₁(LO) **upward** from 964 cm⁻¹; V-doping shifts it **downward**.
+Literature on doped SiC shows that the LO peak position correlates with
+carrier concentration: different dopant types shift the LO/LOPC feature
+upwards or downwards relative to the undoped reference.
 
-**Action:** Add a `carrier_concentration_proxy` output based on LO peak position,
-with a lookup table calibrated from Lin et al. Table 1.
+**Action:** Add a `carrier_concentration_proxy` output based on LO/LOPC
+peak position, with a lookup table calibrated from published LO-shift vs.
+carrier-density curves.
 
 > Reference: Lin et al. 2012, Table 1 & §3
 
