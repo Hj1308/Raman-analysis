@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A Python application for **quantitative analysis of Raman spectra** of graphene and graphene-like (sp² carbon) materials, with robust support for doped and disordered systems: N-doped, B-doped, SiC-grown graphene, g-C₃N₄, GO, and rGO.
+A Python application for **quantitative analysis of Raman spectra** of graphene and graphene-like (sp² carbon) materials, with robust support for doped and disordered systems: N-doped, B-doped, SiC-grown graphene, GO, rGO, and dedicated CN-mode detection for g-C₃N₄ under UV/NIR-friendly Raman conditions.
 
 ---
 
@@ -30,7 +30,7 @@ Raman spectroscopy is the primary non-destructive probe of structural quality, d
 
 ## Material-Specific Raman Signatures
 
-### Boron-Doped Graphene (g-BSiC)
+### Boron-Doped Graphene 
 
 Substitutional boron (0.22 at% in single-layer graphene) introduces chemical disorder: the B–C bond is ~0.5 Å longer than C–C, breaking translational symmetry and activating the D band. Key signatures [Kim 2012]:
 
@@ -41,7 +41,7 @@ Substitutional boron (0.22 at% in single-layer graphene) introduces chemical dis
 - **Defect spacing**: L_D ≈ 4.76 nm corresponds to 0.22 at% B (Cançado 2011 formula applied to B atoms as vacancy-like scatterers).
 - **I_D/I_D′ ≈ 7**: consistent with vacancy-type scatterers [Eckmann 2012], confirming substitutional incorporation rather than edge or sp³ defects.
 
-### Nitrogen-Doped Graphene (g-NSiC)
+### Nitrogen-Doped Graphene 
 
 Nitrogen substitution creates n-type doping. The N–C bond length is closer to C–C than B–C, so structural disorder is lower. Key signatures:
 
@@ -62,7 +62,7 @@ g-C₃N₄ has a fundamentally different Raman signature from graphene [Zinin 20
   - **~1728 cm⁻¹**: high-frequency unassigned mode.
   - The D band is **absent** in UV Raman of g-C₃N₄ — analogous to diamond-like carbon.
 
-> ⚠️ **Analyser note:** When a spectrum shows the 691/988 cm⁻¹ doublet but lacks a clear sp² G band, interpret as g-C₃N₄, not disordered graphene. The visible-range 1357/1560 cm⁻¹ bands are unreliable. This analyser targets sp² C–C materials; dedicated g-C₃N₄ mode (NIR/UV) is on the roadmap.
+> ⚠️ **Analyser note:** When a spectrum shows the 691/988 cm⁻¹ doublet, the analyser can now flag g-C₃N₄-specific CN modes through dedicated `CN_triazine` and `CN_bending` peak windows. If these modes are detected under visible excitation, the report warns that fluorescence is likely and recommends UV or NIR Raman for quantitative CN-mode interpretation.
 
 ### Reduced Graphene Oxide (rGO) and GO
 
@@ -97,6 +97,9 @@ Covalent aryl functionalization of graphene is substrate-dependent [Dierke 2022]
 - **Pseudo-Voigt area correction** — FWHM and integrated area follow the Thompson–Cox–Hastings definition
 - **Quantitative ratios** — I_D/I_G, I_2D/I_G, I_D′/I_G, I_D/I_D′
 - **Defect density** — L_D (Cançado 2011, full E_L⁴ correction)
+- **g-C₃N₄ CN-mode detection** — dedicated `CN_triazine` (~691 cm⁻¹) and `CN_bending` (~988 cm⁻¹) windows for UV/NIR-friendly Raman analysis
+- **g-C₃N₄ report logic** — `gcn4_detected` flag plus `gcn4_mode_note` warning for visible excitation
+- **Doping estimator correction** — `carrier_density_cm2` scaling fixed to remove an erroneous extra factor of `10^12`
 - **Disorder stage** — Stage 1 / Stage 2 classification with FWHM(G) cross-check
 - **Defect type classification** — sp³ / vacancy / edge via I_D/I_D′ [Eckmann 2012]
 - **Layer number estimation** — from I_2D/I_G with FWHM(2D) reliability guard
@@ -267,7 +270,7 @@ Single Lorentzian for 2D is appropriate for monolayer only. In bilayer graphene,
 Cançado 2011 formula is valid in Stage 1 only. When Stage 2 is assigned, L_D is set to `NaN` with a warning in `L_D_note`. Use FWHM(G) as the primary disorder metric for Stage 2 samples.
 
 ### g-C₃N₄ and Visible Excitation
-Visible-excitation spectra of g-C₃N₄ are dominated by fluorescence. The apparent 1357/1560 cm⁻¹ peaks carry no structural information [Zinin 2009]. Dedicated g-C₃N₄ mode (NIR/UV, 691/988 cm⁻¹ windows) is on the roadmap.
+Visible-excitation spectra of g-C₃N₄ are dominated by fluorescence. The apparent 1357/1560 cm⁻¹ bands carry no reliable structural information [Zinin 2009]. The analyser now includes dedicated UV/NIR CN-mode support through the 691/988 cm⁻¹ windows, but visible-range spectra remain fundamentally fluorescence-limited and should be interpreted with caution.
 
 ### Layer Number in rGO / Functionalised Graphene
 I_2D/I_G is not a reliable layer indicator for rGO or functionalised graphene; the 2D band depends on preparation method, not layer count [Mohan 2017].
@@ -290,11 +293,11 @@ Dual-Lorentzian deconvolution may not fully separate G and D′ in extreme cases
 | **B-doping fingerprint flag** | Auto-detect: constant G position + I_D/I_D′ ≈ 7 + I_D/I_G ≫ 1 [Kim 2012] | 🔴 High |
 | **Fitting uncertainty (scipy)** | Error bars from covariance matrix for all users (no lmfit required) | 🔴 High |
 | **Multi-Lorentzian 2D fitting** | 4-component decomposition for bilayer/trilayer [Ferrari 2006] | 🟡 Medium |
-| **Doping level estimator** | G-band shift → carrier density → n/p doping type [Pisana 2007] | 🟡 Medium |
+| **Carrier-density estimator refinement** | G-band shift → carrier density → n/p doping type; scaling bug fixed in current main branch | 🟢 Implemented / refine |
 | **Stage boundary refinement** | FWHM(G) + A_D/A_G combined metric; 0D vs. 1D defect discrimination [Wu 2018] | 🟡 Medium |
 | **Dispersion slope validator** | Multi-wavelength: D slope ≈ 53 cm⁻¹/eV, 2D ≈ 106 cm⁻¹/eV; deviation flags contamination [Cançado 2011] | 🟡 Medium |
 | **arPLS baseline** | Asymmetrically reweighted PLS for fluorescence-heavy spectra (GO, g-C₃N₄) | 🟡 Medium |
-| **NIR/UV mode for g-C₃N₄** | Dedicated windows at 691/988 cm⁻¹; triazine ring breathing modes [Zinin 2009] | 🟢 Planned |
+| **NIR/UV mode for g-C₃N₄** | Dedicated windows at 691/988 cm⁻¹; analyzer warning/note for visible excitation [Zinin 2009] | ✅ Implemented |
 | **Batch statistics** | Mean ± std across all samples; ratio heatmap for batch runs | 🟢 Planned |
 | **Substrate effect report** | Flag I_D/I_G contrast on hBN vs. SiO₂; L_D comparison [Dierke 2022] | 🟢 Planned |
 | **Electrochemical doping tracker** | G-band shift vs. gate voltage; cyclic voltammetry-compatible input | 🟢 Planned |
@@ -376,6 +379,14 @@ Plain text: H.J (2026). *Raman Spectrum Analyzer*. Zenodo. https://doi.org/10.52
 ---
 
 ## Changelog
+
+### v2.4 — 2026-07-03
+- Feature #9: dedicated g-C₃N₄ CN-mode support via `CN_triazine` (670–715 cm⁻¹) and `CN_bending` (960–1010 cm⁻¹)
+- Added `gcn4_detected` and `gcn4_mode_note` to analyzer output
+- Added g-C₃N₄ CN-mode section to formatted report
+- Visible-excitation warning for g-C₃N₄ CN-mode detection; UV/NIR-friendly note for non-visible excitation
+- Fixed `carrier_density_cm2` scaling in `_estimate_doping` by removing an erroneous extra factor of `10^12`
+- Full test suite passes after Feature #9 and carrier-density fix
 
 ### v2.3 — 2026-07-02
 - Global D / G / D′ simultaneous fit (`_fit_D_G_Dp_global`)
