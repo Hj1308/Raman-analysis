@@ -151,6 +151,13 @@ _G_SEARCH_LO  = 1540.0
 _G_SEARCH_HI  = 1680.0
 _G_HALF_WIDTH = 50.0     # cm⁻¹ each side of detected centre
 
+# Physically-motivated center bounds for the G and D' bands, shared by all
+# fitters so a loose bound in one path can't pull G onto D or D' (a bug seen
+# on strongly disordered rGO spectra). G in sp² carbons sits ~1560-1600;
+# D' ~1610-1625. Bounds are deliberately a little wider than those ranges.
+_G_CENTER_MIN, _G_CENTER_MAX = 1555.0, 1605.0
+_DP_CENTER_MIN, _DP_CENTER_MAX = 1600.0, 1640.0
+
 # Global D+G+D′ window
 _DGDp_LO = 1250.0
 _DGDp_HI = 1700.0
@@ -275,6 +282,23 @@ def _triple_lorentzian(x, cD, aD, gD, cG, aG, gG, cDp, aDp, gDp):
     return (_lorentzian(x, cD, aD, gD)
             + _lorentzian(x, cG, aG, gG)
             + _lorentzian(x, cDp, aDp, gDp))
+
+
+def _triple_pseudo_voigt(x,
+                         cD, aD, fD, eD,
+                         cG, aG, fG, eG,
+                         cDp, aDp, fDp, eDp):
+    """Sum of three pseudo-Voigt peaks (D, G, D') — 12 parameters.
+
+    Used for the adaptive-lineshape global fit in disordered materials
+    (GO/rGO/g-C3N4), where D and G are inhomogeneously broadened and a
+    pure-Lorentzian model biases FWHM and area. Each peak carries its own
+    mixing parameter eta; reporting eta is itself diagnostic
+    (eta->1 homogeneous/Lorentzian, eta->0 inhomogeneous/Gaussian).
+    """
+    return (_pseudo_voigt(x, cD,  aD,  fD,  eD)
+            + _pseudo_voigt(x, cG,  aG,  fG,  eG)
+            + _pseudo_voigt(x, cDp, aDp, fDp, eDp))
 
 
 def _pseudo_voigt(x, center, amplitude, fwhm, eta):
@@ -417,12 +441,13 @@ def _fit_peak(wn, intensity, lo, hi, name, use_pseudo_voigt=False):
     return result
 
 
-def _fit_G_adaptive(wn: np.ndarray, intensity: np.ndarray) -> PeakResult:
+def _fit_G_adaptive(wn: np.ndarray, intensity: np.ndarray,
+                    use_pv: bool = False) -> PeakResult:
     g_centre = _find_G_peak(wn, intensity)
     lo = max(1480.0, g_centre - _G_HALF_WIDTH)
     hi = min(1700.0, g_centre + _G_HALF_WIDTH)
 
-    result = _fit_peak(wn, intensity, lo, hi, "G")
+    result = _fit_peak(wn, intensity, lo, hi, "G", use_pseudo_voigt=use_pv)
     if result.found:
         return result
     return _fit_G_deconvolve(wn, intensity, g_centre)
@@ -438,12 +463,13 @@ def _fit_G_deconvolve(wn, intensity, g_centre_hint):
         return result
 
     a0   = float(yd.max())
-    c_G  = float(np.clip(g_centre_hint, 1540.0, 1640.0))
-    c_Dp = float(np.clip(c_G + 20.0,   1560.0, 1680.0))
+    c_G  = float(np.clip(g_centre_hint, _G_CENTER_MIN, _G_CENTER_MAX))
+    c_Dp = float(np.clip(c_G + 20.0,   _DP_CENTER_MIN, _DP_CENTER_MAX))
 
     try:
         p0     = [c_G, a0*0.8, 20.0, c_Dp, a0*0.4, 15.0]
-        bounds = ([1480,0,3,1540,0,3],[1660,np.inf,100,1700,np.inf,80])
+        bounds = ([_G_CENTER_MIN, 0, 3, _DP_CENTER_MIN, 0, 3],
+                  [_G_CENTER_MAX, np.inf, 160, _DP_CENTER_MAX, np.inf, 120])
         popt, pcov = curve_fit(_dual_lorentzian, xd, yd,
                                 p0=p0, bounds=bounds, maxfev=10000)
         y_fit = _dual_lorentzian(xd, *popt)
@@ -524,8 +550,8 @@ def _fit_D_G_Dp_global(
               c_G,  a0,     20.0,
               c_Dp, a0*0.2, 12.0]
         bounds = (
-            [d_lo, 0, 3,   1500, 0, 5,  1600, 0, 3],
-            [d_hi, np.inf, 80,  1660, np.inf, 80, 1700, np.inf, 60],
+            [d_lo, 0, 3,   1555, 0, 5,  1600, 0, 3],
+            [d_hi, np.inf, 80,  1605, np.inf, 80, 1640, np.inf, 60],
         )
         popt, pcov = curve_fit(
             _triple_lorentzian, xd, yd,
@@ -567,6 +593,131 @@ def _fit_D_G_Dp_global(
 
     except Exception:
         return empty
+
+
+def _fit_D_G_Dp_global_pv(
+    wn: np.ndarray,
+    intensity: np.ndarray,
+    d_lo: float,
+    d_hi: float,
+) -> Dict[str, PeakResult]:
+    """Pseudo-Voigt variant of the global D/G/D' fit (adaptive lineshape).
+
+    Same windowing and detection logic as _fit_D_G_Dp_global, but each of
+    the three bands is a pseudo-Voigt with a free eta. Intended for
+    disordered / inhomogeneously broadened materials (GO, rGO, g-C3N4)
+    where a pure-Lorentzian model systematically mis-estimates FWHM/area.
+    """
+    lo = max(_DGDp_LO, d_lo - 30)
+    hi = _DGDp_HI
+    mask   = (wn >= lo) & (wn <= hi)
+    xd, yd = wn[mask], intensity[mask]
+
+    empty = {
+        "D":       PeakResult(name="D",  model_x=xd, model_y=np.zeros_like(xd)),
+        "G":       PeakResult(name="G",  model_x=xd, model_y=np.zeros_like(xd)),
+        "D_prime": PeakResult(name="D'", model_x=xd, model_y=np.zeros_like(xd)),
+    }
+    if len(xd) < 15 or yd.max() <= 0:
+        return empty
+
+    a0  = float(yd.max())
+    d_mask = (xd >= d_lo) & (xd <= d_hi)
+    c_D  = float(xd[d_mask][np.argmax(yd[d_mask])]) if np.any(d_mask) else (d_lo + d_hi) / 2
+    c_G  = 1580.0
+    c_Dp = 1620.0
+
+    try:
+        # 12 params: (center, amp, fwhm, eta) x 3.  eta0=0.5 (balanced).
+        p0 = [c_D,  a0*0.6, 50.0, 0.5,
+              c_G,  a0,     40.0, 0.5,
+              c_Dp, a0*0.2, 24.0, 0.5]
+        bounds = (
+            [d_lo, 0, 6,   0.0,  1555, 0, 10, 0.0,  1600, 0, 6,  0.0],
+            [d_hi, np.inf, 200, 1.0, 1605, np.inf, 200, 1.0, 1640, np.inf, 120, 1.0],
+        )
+        popt, pcov = curve_fit(
+            _triple_pseudo_voigt, xd, yd,
+            p0=p0, bounds=bounds, maxfev=20000,
+        )
+        y_fit = _triple_pseudo_voigt(xd, *popt)
+        r2    = _r2(yd, y_fit)
+
+        cD, aD, fD, eD     = popt[0:4]
+        cG, aG, fG, eG     = popt[4:8]
+        cDp, aDp, fDp, eDp = popt[8:12]
+
+        cD_std  = _pcov_stderr(pcov, 0)
+        fD_std  = _pcov_stderr(pcov, 2)
+        cG_std  = _pcov_stderr(pcov, 4)
+        fG_std  = _pcov_stderr(pcov, 6)
+        cDp_std = _pcov_stderr(pcov, 8)
+        fDp_std = _pcov_stderr(pcov, 10)
+
+        det_D,  snr_D  = _is_detected(aD,  yd, _pseudo_voigt(xd, cD,  aD,  fD,  eD),  r2)
+        det_G,  snr_G  = _is_detected(aG,  yd, _pseudo_voigt(xd, cG,  aG,  fG,  eG),  r2)
+        det_Dp, snr_Dp = _is_detected(aDp, yd, _pseudo_voigt(xd, cDp, aDp, fDp, eDp), r2)
+
+        def _pv_area(a, f, eta):
+            sigma_g = f / 2.3548206
+            gamma_l = f / 2.0
+            return (eta * a * np.pi * gamma_l
+                    + (1.0 - eta) * a * sigma_g * np.sqrt(2 * np.pi))
+
+        def _mk(name, c, a, f, eta, det, snr, c_std, f_std):
+            return PeakResult(
+                name=name, center=c, amplitude=a,
+                fwhm=f, area=_pv_area(a, f, eta),
+                r_squared=r2, snr=snr, found=det,
+                model_x=xd, model_y=_pseudo_voigt(xd, c, a, f, eta),
+                center_stderr=c_std,
+                fwhm_stderr=f_std,
+            )
+
+        return {
+            "D":       _mk("D",  cD,  aD,  fD,  eD,  det_D,  snr_D,  cD_std,  fD_std),
+            "G":       _mk("G",  cG,  aG,  fG,  eG,  det_G,  snr_G,  cG_std,  fG_std),
+            "D_prime": _mk("D'", cDp, aDp, fDp, eDp, det_Dp, snr_Dp, cDp_std, fDp_std),
+        }
+
+    except Exception:
+        return empty
+
+
+# ── Disorder-regime detection for adaptive lineshape (Fix #1) ──
+_DISORDER_FWHM_G = 40.0   # cm⁻¹; G broader than this suggests disorder
+
+
+def _detect_disorder_regime(wn, intensity, material=None) -> bool:
+    """Decide whether to use pseudo-Voigt (disordered) vs Lorentzian.
+
+    Returns True (use pseudo-Voigt) when either:
+      * the material name implies inhomogeneous broadening
+        (GO / rGO / g-C3N4), or
+      * a quick single-Lorentzian probe of the G band gives FWHM(G)
+        above ~40 cm⁻¹, the empirical onset of disorder-dominated
+        broadening in sp² carbons.
+    Falls back to False (Lorentzian) on any probing failure.
+    """
+    if material:
+        s = str(material).lower()
+        if any(k in s for k in ("go", "rgo", "graphene oxide",
+                                 "gc3n4", "g-c3n4", "gcn", "c3n4",
+                                 "carbon nitride", "amorphous", "disorder")):
+            return True
+    try:
+        g_centre = _find_G_peak(wn, intensity)
+        lo = max(1480.0, g_centre - _G_HALF_WIDTH)
+        hi = min(1700.0, g_centre + _G_HALF_WIDTH)
+        probe = _fit_peak(wn, intensity, lo, hi, "G_probe")
+        # A broad G is the disorder signal itself; the strict `found` flag
+        # can be False precisely because the band is broad/weak, so key the
+        # decision on the fitted FWHM as long as it is a finite positive.
+        if probe.fwhm and np.isfinite(probe.fwhm) and probe.fwhm > _DISORDER_FWHM_G:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _fit_2D_bilayer_4L(
@@ -811,10 +962,31 @@ def fit_all_peaks(
     intensity:   np.ndarray,
     laser_nm:    float = 532.0,
     band_config: Optional[Dict] = None,
+    adaptive_lineshape: str = "auto",
+    material:    Optional[str] = None,
 ) -> Dict[str, PeakResult]:
+    """Fit all Raman bands.
+
+    adaptive_lineshape : 'auto' | 'lorentzian' | 'pseudo_voigt'
+        Controls the D/G/D' global fit line shape.
+        'auto' (default) uses _detect_disorder_regime to pick pseudo-Voigt
+        for disordered/inhomogeneous materials (GO/rGO/g-C3N4 or broad G)
+        and Lorentzian otherwise. 'lorentzian' forces the legacy behaviour;
+        'pseudo_voigt' forces the adaptive model.
+    material : optional material name, used by the 'auto' regime detector.
+    """
     windows  = get_peak_windows(laser_nm)
     band_cfg = band_config or {}
     use_lmfit = _lmfit_available()
+
+    # Resolve adaptive lineshape choice once, up front.
+    mode = (adaptive_lineshape or "auto").lower().replace("-", "_")
+    if mode == "pseudo_voigt":
+        _use_pv_global = True
+    elif mode == "lorentzian":
+        _use_pv_global = False
+    else:  # auto
+        _use_pv_global = _detect_disorder_regime(wn, intensity, material)
 
     def _method(band):
         m = band_cfg.get(band, {}).get("method", "auto")
@@ -861,14 +1033,23 @@ def fit_all_peaks(
                 results.setdefault("D_prime", g_res.deconv_partner)
             results.setdefault("D", _fit_peak(wn, intensity, *windows["D"], "D"))
         else:
-            global_fit = _fit_D_G_Dp_global(wn, intensity, *windows["D"])
+            if _use_pv_global:
+                global_fit = _fit_D_G_Dp_global_pv(wn, intensity, *windows["D"])
+                # Fall back to Lorentzian only if the pseudo-Voigt fit lost
+                # the D band itself (the anchor). A weak/unfound G is a
+                # property of very disordered spectra, not a fit failure,
+                # so it should not trigger fallback.
+                if not global_fit["D"].found:
+                    global_fit = _fit_D_G_Dp_global(wn, intensity, *windows["D"])
+            else:
+                global_fit = _fit_D_G_Dp_global(wn, intensity, *windows["D"])
             results.setdefault("D",       global_fit["D"])
             results.setdefault("D_prime", global_fit["D_prime"])
 
             if global_fit["G"].found:
                 results.setdefault("G", global_fit["G"])
             else:
-                results["G"] = _fit_G_adaptive(wn, intensity)
+                results["G"] = _fit_G_adaptive(wn, intensity, use_pv=_use_pv_global)
                 g_res = results["G"]
                 if g_res.is_deconvolved and g_res.deconv_partner is not None:
                     dp_global = results.get("D_prime")
