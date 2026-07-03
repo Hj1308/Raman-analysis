@@ -68,6 +68,9 @@ _HC_EV_NM          = 1239.841984   # eV·nm
 _D_SLOPE_REFERENCE = 53.0          # cm⁻¹/eV  [Ferrari & Basko 2013]
 _D_SLOPE_TOLERANCE = 10.0          # cm⁻¹/eV  — flag if |measured − ref| > this
 
+_GCN4_VIS_MIN_NM = 400.0  # nm; below this is UV (fluorescence-friendly)
+_GCN4_VIS_MAX_NM = 700.0  # nm; above this is NIR (fluorescence-friendly)
+
 # ── Substrates where I2D/IG n/p-type classification is unreliable ──────
 # Das 2008 model was validated on free-standing / SiO2-supported graphene.
 # On these substrates the 2D band is absent, suppressed, or strongly
@@ -269,6 +272,8 @@ class RamanAnalysis:
     stage_refined_note:  str   = ""
     # ── v2.6 Feature #8: dispersion slope validator ───────
     dispersion_slope:    Optional[DispersionSlopeResult] = field(default=None)
+    gcn4_detected:       bool  = False
+    gcn4_mode_note:      str   = ""
     # ─────────────────────────────────────────────────────
     L_D_nm:              float = np.nan
     L_D_note:            str   = ""
@@ -492,6 +497,35 @@ def _refine_stage(
     return label, "  ".join(note_parts)
 
 
+def _check_gcn4_mode(peaks, laser_nm):
+    cn_tri = peaks.get("CN_triazine")
+    cn_ben = peaks.get("CN_bending")
+
+    detected = (
+        (cn_tri is not None and cn_tri.found)
+        or (cn_ben is not None and cn_ben.found)
+    )
+    if not detected:
+        return False, ""
+
+    is_visible = _GCN4_VIS_MIN_NM < laser_nm < _GCN4_VIS_MAX_NM
+
+    if is_visible:
+        note = (
+            "g-C3N4 CN modes detected (691/988 cm-1) at visible excitation "
+            "({:.0f} nm). Strong fluorescence likely; "
+            "UV (325-364 nm) or NIR (785 nm) Raman is recommended for "
+            "quantitative CN-mode analysis."
+        ).format(laser_nm)
+    else:
+        note = (
+            "g-C3N4 CN modes (691/988 cm-1) detected under UV/NIR-friendly "
+            "excitation ({:.0f} nm): conditions suitable for CN-mode analysis."
+        ).format(laser_nm)
+
+    return True, note
+
+
 # ── Main analysis function ────────────────────────────────
 def analyze(
     peaks:        Dict[str, PeakResult],
@@ -560,6 +594,10 @@ def analyze(
     result.G_found    = G    is not None and G.found
     result.D_found    = D    is not None and D.found
     result.twoD_found = twoD is not None and twoD.found
+
+    # Feature #9: g-C3N4 CN modes are independent of the G band,
+    # so check them before the G-band early return.
+    result.gcn4_detected, result.gcn4_mode_note = _check_gcn4_mode(peaks, laser_nm)
 
     if not result.G_found:
         return result
@@ -795,6 +833,14 @@ def format_report(
     if analysis.boron_doping_flag:
         lines.append("  *** Boron doping fingerprint detected ***")
         lines.append("  B-doping note        : {}".format(analysis.boron_doping_note))
+
+    lines += [
+        "",
+        "  g-C3N4 CN MODES (Feature #9)",
+        "  Detected            : {}".format("Yes" if analysis.gcn4_detected else "No"),
+    ]
+    if analysis.gcn4_mode_note:
+        lines.append("  g-C3N4 note         : {}".format(analysis.gcn4_mode_note))
 
     # ── v2.6 Feature #8: dispersion slope block ───────────
     dslope = analysis.dispersion_slope

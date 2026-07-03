@@ -71,3 +71,17 @@ def noisy_spectrum(wavenumbers):
     y += _lorentzian(wavenumbers, 1582, 0.20, 14)   # G barely above noise
     y += rng.normal(0, 0.18, size=len(wavenumbers))
     return y
+@pytest.fixture
+def gcn4_wavenumbers():
+    return np.linspace(600, 1200, 1200)
+
+
+@pytest.fixture
+def gcn4_spectrum(gcn4_wavenumbers):
+    """Synthetic g-C3N4-like spectrum with CN modes at ~691 and ~988 cm⁻1."""
+    rng = np.random.default_rng(123)
+    y = np.zeros_like(gcn4_wavenumbers)
+    y += _lorentzian(gcn4_wavenumbers, 691.0, 1.00, 8.0)
+    y += _lorentzian(gcn4_wavenumbers, 988.0, 0.85, 10.0)
+    y += rng.normal(0, 0.01, size=len(gcn4_wavenumbers))
+    return np.clip(y, 0, None)

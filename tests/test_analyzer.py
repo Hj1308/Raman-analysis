@@ -14,7 +14,7 @@ Fix log
      The old expected value 230432 was wrong (used lambda in m, not nm).
      Corrected expected ~12 nm, tolerance 2 %.
 
-  2. test_monolayer_threshold_laser_dependent
+  2. test_monolayenotepad tests\test_analyzer.pyr_threshold_laser_dependent
      _monolayer_threshold(633) = 1.5.  The test sends I2D/IG = 2.2.
      2.2 > 1.5  -> code CORRECTLY reports Monolayer.
      Old test asserted 'Monolayer not in result' -- physically wrong.
@@ -45,7 +45,69 @@ from src.analyzer import (
     analyze,
     _monolayer_threshold,
     RamanAnalysis,
+    format_report,
 )
+class TestGCN4Analyzer:
+    def test_gcn4_detected_true_when_cn_triazine_found(self):
+        peaks = {
+            "CN_triazine": _mock_peak(
+                "CN_triazine", center=691.0, amplitude=80.0,
+                fwhm=16.0, area=1200.0, found=True
+            ),
+            "CN_bending": _mock_peak(
+                "CN_bending", center=988.0, amplitude=60.0,
+                fwhm=18.0, area=1000.0, found=False
+            ),
+        }
+        r = analyze(peaks, laser_nm=785)
+        assert r.gcn4_detected is True
+
+    def test_gcn4_visible_excitation_warning_added(self):
+        peaks = {
+            "CN_triazine": _mock_peak(
+                "CN_triazine", center=691.0, amplitude=80.0,
+                fwhm=16.0, area=1200.0, found=True
+            ),
+            "CN_bending": _mock_peak(
+                "CN_bending", center=988.0, amplitude=70.0,
+                fwhm=18.0, area=1100.0, found=True
+            ),
+        }
+        r = analyze(peaks, laser_nm=532)
+        assert r.gcn4_detected is True
+        assert "visible excitation" in r.gcn4_mode_note
+        assert "UV" in r.gcn4_mode_note or "NIR" in r.gcn4_mode_note
+
+    def test_gcn4_uv_nir_note_added(self):
+        peaks = {
+            "CN_triazine": _mock_peak(
+                "CN_triazine", center=691.0, amplitude=80.0,
+                fwhm=16.0, area=1200.0, found=True
+            ),
+            "CN_bending": _mock_peak(
+                "CN_bending", center=988.0, amplitude=70.0,
+                fwhm=18.0, area=1100.0, found=True
+            ),
+        }
+        r = analyze(peaks, laser_nm=785)
+        assert r.gcn4_detected is True
+        assert "UV/NIR-friendly" in r.gcn4_mode_note
+
+    def test_format_report_includes_gcn4_section(self):
+        peaks = {
+            "CN_triazine": _mock_peak(
+                "CN_triazine", center=691.0, amplitude=80.0,
+                fwhm=16.0, area=1200.0, found=True
+            ),
+            "CN_bending": _mock_peak(
+                "CN_bending", center=988.0, amplitude=70.0,
+                fwhm=18.0, area=1100.0, found=True
+            ),
+        }
+        r = analyze(peaks, laser_nm=785)
+        txt = format_report("test.txt", peaks, r, 785)
+        assert "g-C3N4 CN MODES (Feature #9)" in txt
+        assert "Detected            : Yes" in txt
 from src.peak_fitter import PeakResult
 
 

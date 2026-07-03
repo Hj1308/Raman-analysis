@@ -219,3 +219,25 @@ class TestPeakResult:
         from src.analyzer import RamanAnalysis
         ra = RamanAnalysis()
         assert ra.twoD_fwhm_warning is False
+# ── g-C3N4 CN modes (Feature #9) ───────────────────────────────────────────
+
+class TestGCN4Modes:
+    def test_CN_windows_non_dispersive(self):
+        w532 = get_peak_windows(532.0)
+        w785 = get_peak_windows(785.0)
+        assert abs(w532["CN_triazine"][0] - w785["CN_triazine"][0]) < 0.01
+        assert abs(w532["CN_triazine"][1] - w785["CN_triazine"][1]) < 0.01
+        assert abs(w532["CN_bending"][0] - w785["CN_bending"][0]) < 0.01
+        assert abs(w532["CN_bending"][1] - w785["CN_bending"][1]) < 0.01
+
+    def test_CN_triazine_found_in_synthetic_gcn4(self, gcn4_wavenumbers, gcn4_spectrum):
+        peaks = fit_all_peaks(gcn4_wavenumbers, gcn4_spectrum, laser_nm=785)
+        p = peaks["CN_triazine"]
+        assert p.found
+        assert abs(p.center - 691.0) < 6.0
+
+    def test_CN_bending_found_in_synthetic_gcn4(self, gcn4_wavenumbers, gcn4_spectrum):
+        peaks = fit_all_peaks(gcn4_wavenumbers, gcn4_spectrum, laser_nm=785)
+        p = peaks["CN_bending"]
+        assert p.found
+        assert abs(p.center - 988.0) < 8.0
