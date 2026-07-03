@@ -1,0 +1,184 @@
+{
+  "entries": [
+    {
+      "id": "cancado2011_clambda_488",
+      "citation": {
+        "authors": "Cancado et al.",
+        "year": 2011,
+        "journal": "Nano Letters",
+        "volume": "11",
+        "pages": "3190",
+        "doi": "10.1021/nl201432g"
+      },
+      "material": "graphene",
+      "metric": "C_lambda",
+      "measure": "nm^3",
+      "value": 1.01e10,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 488
+      },
+      "confidenceLevel": "strong",
+      "notes": "C_lambda at 488 nm from Eq 1",
+      "quote": null
+    },
+    {
+      "id": "cancado2011_clambda_514",
+      "citation": {
+        "authors": "Cancado et al.",
+        "year": 2011,
+        "journal": "Nano Letters",
+        "volume": "11",
+        "pages": "3190",
+        "doi": "10.1021/nl201432g"
+      },
+      "material": "graphene",
+      "metric": "C_lambda",
+      "measure": "nm^3",
+      "value": 1.26e10,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514
+      },
+      "confidenceLevel": "strong",
+      "notes": "C_lambda at 514 nm",
+      "quote": null
+    },
+    {
+      "id": "cancado2011_clambda_532",
+      "citation": {
+        "authors": "Cancado et al.",
+        "year": 2011,
+        "journal": "Nano Letters",
+        "volume": "11",
+        "pages": "3190",
+        "doi": "10.1021/nl201432g"
+      },
+      "material": "graphene",
+      "metric": "C_lambda",
+      "measure": "nm^3",
+      "value": 1.44e10,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 532
+      },
+      "confidenceLevel": "strong",
+      "notes": "C_lambda at 532 nm",
+      "quote": null
+    },
+    {
+      "id": "cancado2011_clambda_633",
+      "citation": {
+        "authors": "Cancado et al.",
+        "year": 2011,
+        "journal": "Nano Letters",
+        "volume": "11",
+        "pages": "3190",
+        "doi": "10.1021/nl201432g"
+      },
+      "material": "graphene",
+      "metric": "C_lambda",
+      "measure": "nm^3",
+      "value": 2.65e10,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 633
+      },
+      "confidenceLevel": "strong",
+      "notes": "C_lambda at 633 nm",
+      "quote": null
+    },
+    {
+      "id": "lucchese2010_ca_stage2",
+      "citation": {
+        "authors": "Lucchese et al.",
+        "year": 2010,
+        "journal": "Carbon",
+        "volume": "48",
+        "pages": "1592",
+        "doi": "10.1016/j.carbon.2009.12.057"
+      },
+      "material": "graphene",
+      "metric": "C_A",
+      "measure": "dimensionless",
+      "value": 4.2,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "stage": "Stage 2"
+      },
+      "confidenceLevel": "strong",
+      "notes": "C_A coefficient Stage 2 Lucchese model",
+      "quote": null
+    },
+    {
+      "id": "lucchese2010_cs_stage2",
+      "citation": {
+        "authors": "Lucchese et al.",
+        "year": 2010,
+        "journal": "Carbon",
+        "volume": "48",
+        "pages": "1592",
+        "doi": "10.1016/j.carbon.2009.12.057"
+      },
+      "material": "graphene",
+      "metric": "C_S",
+      "measure": "dimensionless",
+      "value": 1.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "stage": "Stage 2"
+      },
+      "confidenceLevel": "strong",
+      "notes": "C_S coefficient Stage 2",
+      "quote": null
+    },
+    {
+      "id": "eckmann2013_idid_sp3_confirmed",
+      "citation": {
+        "authors": "Eckmann et al.",
+        "year": 2013,
+        "journal": "Phys. Rev. B",
+        "volume": "88",
+        "pages": "035426",
+        "doi": "10.1103/PhysRevB.88.035426"
+      },
+      "material": "graphene with sp3",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 13.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "sp3"
+      },
+      "confidenceLevel": "strong",
+      "notes": "sp3 defects I_D/I_D' ~ 13 confirmed value",
+      "quote": "I_D/I_D' = 13 for sp3 sites"
+    },
+    {
+      "id": "eckmann2013_idid_vacancy_confirmed",
+      "citation": {
+        "authors": "Eckmann et al.",
+        "year": 2013,
+        "journal": "Phys. Rev. B",
+        "volume": "88",
+        "pages": "035426",
+        "doi": "10.1103/PhysRevB.88.035426"
+      },
+      "material": "graphene with vacancies",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 7.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "vacancy"
+      },
+      "confidenceLevel": "strong",
+      "notes": "vacancy defects I_D/I_D' ~ 7 confirmed",
+      "quote": "I_D/I_D' = 7 for vacancies"
+    }
+  ]
+}
