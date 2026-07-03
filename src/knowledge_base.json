@@ -1,0 +1,507 @@
+{
+  "entries": [
+    {
+      "id": "anusuya2022_s1_adag",
+      "citation": {
+        "authors": "Anusuya et al.",
+        "year": 2022,
+        "journal": "FlatChem",
+        "volume": null,
+        "pages": "100422",
+        "doi": "10.1016/j.flatc.2022.100422"
+      },
+      "material": "GO",
+      "metric": "A_D/A_G",
+      "measure": "area",
+      "value": null,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 633,
+        "synthesis": "modified Hummers",
+        "substrate": null
+      },
+      "confidenceLevel": "strong",
+      "notes": "used in defect diagram; La=5.8 nm, LD=7.0 nm from Eq.7, see Table 1",
+      "quote": null
+    },
+    {
+      "id": "eckmann2013_ididp_vacancies",
+      "citation": {
+        "authors": "Eckmann et al.",
+        "year": 2013,
+        "journal": "Phys. Rev. B",
+        "volume": "88",
+        "pages": "035426",
+        "doi": "10.1103/PhysRevB.88.035426"
+      },
+      "material": "graphene with vacancies",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 7.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "vacancy",
+        "synthesis": "ion bombardment / anodic bonding",
+        "substrate": "SiO2/Si",
+        "stage": "Stage 1"
+      },
+      "confidenceLevel": "strong",
+      "notes": "from previous work (Ref. 71) and confirmed",
+      "quote": "I_D/I_D' = 7 for vacancies"
+    },
+    {
+      "id": "eckmann2013_ididp_sp3",
+      "citation": {
+        "authors": "Eckmann et al.",
+        "year": 2013,
+        "journal": "Phys. Rev. B",
+        "volume": "88",
+        "pages": "035426",
+        "doi": "10.1103/PhysRevB.88.035426"
+      },
+      "material": "graphene with sp3 sites",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 13.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "sp3",
+        "synthesis": "plasma treatment",
+        "substrate": "SiO2/Si"
+      },
+      "confidenceLevel": "strong",
+      "notes": "from previous work (Ref. 71)",
+      "quote": "I_D/I_D' = 13 for sp3 sites"
+    },
+    {
+      "id": "eckmann2013_ididp_bdoped",
+      "citation": {
+        "authors": "Eckmann et al.",
+        "year": 2013,
+        "journal": "Phys. Rev. B",
+        "volume": "88",
+        "pages": "035426",
+        "doi": "10.1103/PhysRevB.88.035426"
+      },
+      "material": "B-doped graphene",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 9.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "dopant": "Boron",
+        "dopant_concentration": null,
+        "synthesis": "CVD",
+        "substrate": null
+      },
+      "confidenceLevel": "suggestive",
+      "notes": "single measurement; may cluster at higher concentration",
+      "quote": "I_D/I_D' = 9 for B-doped graphene"
+    },
+    {
+      "id": "jiang2015_ididp_mv",
+      "citation": {
+        "authors": "Jiang et al.",
+        "year": 2015,
+        "journal": "Carbon",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene monovacancy",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 0.8,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "monovacancy"
+      },
+      "confidenceLevel": "strong",
+      "notes": "DFT + tight-binding simulation",
+      "quote": null
+    },
+    {
+      "id": "jiang2015_ididp_dv",
+      "citation": {
+        "authors": "Jiang et al.",
+        "year": 2015,
+        "journal": "Carbon",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene divacancy",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 11.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "divacancy"
+      },
+      "confidenceLevel": "strong",
+      "notes": null,
+      "quote": null
+    },
+    {
+      "id": "jiang2015_ididp_sw",
+      "citation": {
+        "authors": "Jiang et al.",
+        "year": 2015,
+        "journal": "Carbon",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene Stone-Wales",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 16.8,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "Stone-Wales"
+      },
+      "confidenceLevel": "strong",
+      "notes": null,
+      "quote": null
+    },
+    {
+      "id": "jiang2015_ididp_555777",
+      "citation": {
+        "authors": "Jiang et al.",
+        "year": 2015,
+        "journal": "Carbon",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene 555-777",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 3.6,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "555-777"
+      },
+      "confidenceLevel": "strong",
+      "notes": null,
+      "quote": null
+    },
+    {
+      "id": "jiang2015_ididp_555567777",
+      "citation": {
+        "authors": "Jiang et al.",
+        "year": 2015,
+        "journal": "Carbon",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene 5555-6-7777",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 4.4,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "5555-6-7777"
+      },
+      "confidenceLevel": "strong",
+      "notes": null,
+      "quote": null
+    },
+    {
+      "id": "jiang2015_ididp_oxygen_plasma",
+      "citation": {
+        "authors": "Jiang et al.",
+        "year": 2015,
+        "journal": "Carbon",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene oxygen plasma",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": null,
+      "range": [2.0, 6.0],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "oxidized defects"
+      },
+      "confidenceLevel": "suggestive",
+      "notes": "range from oxygen plasma experiment",
+      "quote": null
+    },
+    {
+      "id": "wu2018_ididp_sp3",
+      "citation": {
+        "authors": "Wu et al.",
+        "year": 2018,
+        "journal": "ACS Nano",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene sp3",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 13.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "sp3"
+      },
+      "confidenceLevel": "strong",
+      "notes": "consistent with Eckmann 2013",
+      "quote": null
+    },
+    {
+      "id": "wu2018_ididp_vacancy",
+      "citation": {
+        "authors": "Wu et al.",
+        "year": 2018,
+        "journal": "ACS Nano",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene vacancy",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 7.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "vacancy"
+      },
+      "confidenceLevel": "strong",
+      "notes": "consistent with Eckmann 2013",
+      "quote": null
+    },
+    {
+      "id": "wu2018_ididp_boundary",
+      "citation": {
+        "authors": "Wu et al.",
+        "year": 2018,
+        "journal": "ACS Nano",
+        "volume": null,
+        "pages": null,
+        "doi": null
+      },
+      "material": "graphene grain boundary",
+      "metric": "I_D/I_D'",
+      "measure": "height",
+      "value": 3.5,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "boundary"
+      },
+      "confidenceLevel": "strong",
+      "notes": "grain boundaries give lower I_D/I_D'",
+      "quote": null
+    },
+    {
+      "id": "eckmann2013_idig_stage1",
+      "citation": {
+        "authors": "Eckmann et al.",
+        "year": 2013,
+        "journal": "Phys. Rev. B",
+        "volume": "88",
+        "pages": "035426",
+        "doi": "10.1103/PhysRevB.88.035426"
+      },
+      "material": "oxidized graphene",
+      "metric": "I_D/I_G",
+      "measure": "height",
+      "value": 4.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "sp3 oxidation",
+        "synthesis": "O2/CF4 plasma",
+        "substrate": "SiO2/Si",
+        "stage": "Stage 1"
+      },
+      "confidenceLevel": "strong",
+      "notes": "onset of stage transition, used as reference",
+      "quote": null
+    },
+    {
+      "id": "eckmann2013_idig_stage2",
+      "citation": {
+        "authors": "Eckmann et al.",
+        "year": 2013,
+        "journal": "Phys. Rev. B",
+        "volume": "88",
+        "pages": "035426",
+        "doi": "10.1103/PhysRevB.88.035426"
+      },
+      "material": "oxidized graphene",
+      "metric": "I_D/I_G",
+      "measure": "height",
+      "value": 2.5,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 514,
+        "defect_type": "sp3 oxidation",
+        "synthesis": "O2/CF4 plasma",
+        "substrate": "SiO2/Si",
+        "stage": "Stage 2"
+      },
+      "confidenceLevel": "strong",
+      "notes": "representative of Stage 2",
+      "quote": null
+    },
+    {
+      "id": "mitra2025_monolayer_posG",
+      "citation": {
+        "authors": "Mitra and Mitra",
+        "year": 2025,
+        "journal": "Nanotechnology",
+        "volume": "36",
+        "pages": "255701",
+        "doi": "10.1088/1361-6528/adde d0"
+      },
+      "material": "monolayer graphene",
+      "metric": "pos_G",
+      "measure": "position/cm-1",
+      "value": 1582.0,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 532,
+        "synthesis": "mechanical exfoliation",
+        "substrate": "SiO2/Si"
+      },
+      "confidenceLevel": "strong",
+      "notes": null,
+      "quote": null
+    },
+    {
+      "id": "mitra2025_monolayer_i2dig",
+      "citation": {
+        "authors": "Mitra and Mitra",
+        "year": 2025,
+        "journal": "Nanotechnology",
+        "volume": "36",
+        "pages": "255701",
+        "doi": "10.1088/1361-6528/adde d0"
+      },
+      "material": "monolayer graphene",
+      "metric": "I_2D/I_G",
+      "measure": "height",
+      "value": 2.03,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 532,
+        "synthesis": "mechanical exfoliation",
+        "substrate": "SiO2/Si"
+      },
+      "confidenceLevel": "strong",
+      "notes": null,
+      "quote": null
+    },
+    {
+      "id": "mitra2025_bulk_i2dig",
+      "citation": {
+        "authors": "Mitra and Mitra",
+        "year": 2025,
+        "journal": "Nanotechnology",
+        "volume": "36",
+        "pages": "255701",
+        "doi": "10.1088/1361-6528/adde d0"
+      },
+      "material": "bulk graphite",
+      "metric": "I_2D/I_G",
+      "measure": "height",
+      "value": 0.44,
+      "range": [null, null],
+      "conditions": {
+        "laser_nm": 532,
+        "synthesis": "natural graphite HOPG",
+        "substrate": "SiO2/Si"
+      },
+      "confidenceLevel": "strong",
+      "notes": "total 2D intensity relative to G",
+      "quote": null
+    },
+    {
+      "id": "king2016_dinfgapp_go",
+      "citation": {
+        "authors": "King et al.",
+        "year": 2016,
+        "journal": "Scientific Reports",
+        "volume": "6",
+        "pages": "19491",
+        "doi": "10.1038/srep19491"
+      },
+      "material": "GO",
+      "metric": "D'_inf - G_app",
+      "measure": "position/cm-1",
+      "value": null,
+      "range": [null, 0.0],
+      "conditions": {
+        "laser_nm": 514,
+        "synthesis": "modified Hummers",
+        "substrate": "glass"
+      },
+      "confidenceLevel": "strong",
+      "notes": "defines GO regime: D'inf - Gapp < 0 (CO < 10)",
+      "quote": "GO: D'inf - Gapp < 0 (CO < 10)"
+    },
+    {
+      "id": "king2016_dinfgapp_rgo",
+      "citation": {
+        "authors": "King et al.",
+        "year": 2016,
+        "journal": "Scientific Reports",
+        "volume": "6",
+        "pages": "19491",
+        "doi": "10.1038/srep19491"
+      },
+      "material": "rGO",
+      "metric": "D'_inf - G_app",
+      "measure": "position/cm-1",
+      "value": null,
+      "range": [0.0, 25.0],
+      "conditions": {
+        "laser_nm": 514,
+        "synthesis": "various reduction methods",
+        "substrate": "glass"
+      },
+      "confidenceLevel": "strong",
+      "notes": "defines rGO regime: 0 < D'inf - Gapp < 25 (10 < CO < 500)",
+      "quote": "rGO: 0 < D'inf - Gapp < 25 (10 < CO < 500)"
+    },
+    {
+      "id": "king2016_dinfgapp_graphene",
+      "citation": {
+        "authors": "King et al.",
+        "year": 2016,
+        "journal": "Scientific Reports",
+        "volume": "6",
+        "pages": "19491",
+        "doi": "10.1038/srep19491"
+      },
+      "material": "graphene",
+      "metric": "D'_inf - G_app",
+      "measure": "position/cm-1",
+      "value": null,
+      "range": [25.0, null],
+      "conditions": {
+        "laser_nm": 514,
+        "substrate": "glass"
+      },
+      "confidenceLevel": "strong",
+      "notes": "defines graphene regime: D'inf - Gapp > 25 (CO > 500)",
+      "quote": "Graphene: D'inf - Gapp > 25 (CO > 500)"
+    }
+  ]
+}
