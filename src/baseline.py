@@ -19,11 +19,29 @@ Change log
           - accepts (wn, y, method, lam, p, ...)  matching streamlit_app.py call
           - always returns (corrected, baseline) tuple  (unpack crash fixed)
           - 'linear' method added (subtract straight line between endpoints)
+  v2.8    Delegate to pybaselines when available [unifies duplicate arPLS]
+          - 'als'/'arpls'/'aspls'/'auto' routed through pybaselines (50+
+            algorithms, well tested) when the package is installed
+          - 'aspls' + 'auto' added: asPLS is better for strong fluorescence
+            (GO / rGO / g-C3N4); 'auto' picks asPLS for those, arPLS otherwise
+          - falls back to the built-in hand-rolled ALS/arPLS if pybaselines
+            is not installed, so the tool still runs with only numpy+scipy
 """
 
 import numpy as np
 from scipy.sparse import csc_matrix, diags
 from scipy.sparse.linalg import spsolve
+
+try:
+    from pybaselines import Baseline as _PybBaseline
+    _HAS_PYBASELINES = True
+except Exception:  # pragma: no cover - environment dependent
+    _HAS_PYBASELINES = False
+
+
+def has_pybaselines() -> bool:
+    """True if the pybaselines backend is available (for logging/tests)."""
+    return _HAS_PYBASELINES
 
 
 # ------------------------------------------------------------------
@@ -181,6 +199,41 @@ def auto_baseline(
 
 
 # ------------------------------------------------------------------
+# pybaselines delegation helper
+# ------------------------------------------------------------------
+
+def _pybaselines_correct(wn, y, method, lam):
+    """Run a pybaselines algorithm and return (corrected, baseline).
+
+    `method` is already normalised (lowercase, no separators). Uses the
+    wavenumber axis when available so x-aware methods behave correctly.
+    Raises if the method is unknown so the caller can fall back.
+    """
+    x = np.asarray(wn, dtype=float) if wn is not None else None
+    fitter = _PybBaseline(x_data=x)
+    if method in ("als", "asls"):
+        baseline, _ = fitter.asls(y, lam=lam)
+    elif method in ("arpls", "arplsbaseline"):
+        baseline, _ = fitter.arpls(y, lam=lam)
+    elif method == "aspls":
+        baseline, _ = fitter.aspls(y, lam=lam)
+    else:
+        raise ValueError(f"pybaselines: unsupported method '{method}'")
+    baseline = np.asarray(baseline, dtype=float)
+    return y - baseline, baseline
+
+
+def _is_fluorescent(material) -> bool:
+    """Heuristic: does the material name imply strong fluorescence?"""
+    if not material:
+        return False
+    s = str(material).lower()
+    return any(k in s for k in ("go", "rgo", "graphene oxide",
+                                "gc3n4", "g-c3n4", "gcn", "c3n4",
+                                "carbon nitride"))
+
+
+# ------------------------------------------------------------------
 # correct_baseline  ← PRIMARY public function for streamlit_app.py
 # ------------------------------------------------------------------
 
@@ -192,6 +245,7 @@ def correct_baseline(
     p: float    = 0.001,
     ratio: float = 1e-6,
     niter: int  = 10,
+    material=None,
 ) -> tuple:
     """
     Unified baseline correction entry-point.
@@ -203,27 +257,53 @@ def correct_baseline(
 
     Parameters
     ----------
-    wn     : wavenumber array (accepted but not used; kept for API compat)
+    wn     : wavenumber array (used by pybaselines x-aware methods; the
+             legacy hand-rolled fallbacks ignore it, kept for API compat)
     y      : 1-D raw intensity array
-    method : 'als' (default)  |  'arPLS'  |  'linear'
+    method : 'als' (default) | 'arPLS' | 'aspls' | 'auto' | 'linear'
+             'auto' selects asPLS for fluorescent materials (see `material`),
+             arPLS otherwise.
     lam    : ALS / arPLS smoothness penalty
-    p      : ALS asymmetry weight
-    ratio  : arPLS convergence criterion
-    niter  : iteration count
+    p      : ALS asymmetry weight (hand-rolled ALS fallback only)
+    ratio  : arPLS convergence criterion (hand-rolled fallback only)
+    niter  : iteration count (hand-rolled fallback only)
+    material : optional material name; when method='auto', a fluorescent
+             material (GO/rGO/g-C3N4) routes to asPLS.
 
     Returns
     -------
     (corrected, baseline) : two 1-D arrays, same length as y
+
+    Notes
+    -----
+    When pybaselines is installed, 'als'/'arpls'/'aspls'/'auto' are handled
+    by that package (well-tested, x-aware). Without it, the built-in
+    hand-rolled ALS/arPLS implementations are used so the tool still runs
+    on a numpy+scipy-only environment.
     """
     y = np.asarray(y, dtype=float)
     m = method.lower().replace("-", "").replace("_", "")
 
+    # Resolve 'auto' to a concrete algorithm.
+    if m == "auto":
+        m = "aspls" if _is_fluorescent(material) else "arpls"
+
+    if m == "linear":
+        return _linear_baseline(y)
+
+    # Prefer pybaselines for the PLS-family methods when available.
+    if _HAS_PYBASELINES and m in ("als", "asls", "arpls", "arplsbaseline", "aspls"):
+        try:
+            return _pybaselines_correct(wn, y, m, lam)
+        except Exception:
+            pass  # fall through to hand-rolled implementations
+
+    # Hand-rolled fallbacks (also used when pybaselines is absent).
     if m == "als":
         return als_baseline(y, lam=lam, p=p, niter=niter)
-    elif m in ("arpls", "arplsbaseline"):
+    elif m in ("arpls", "arplsbaseline", "aspls"):
+        # No hand-rolled asPLS; arPLS is the closest available fallback.
         return arPLS_baseline(y, lam=lam, ratio=ratio, niter=niter)
-    elif m == "linear":
-        return _linear_baseline(y)
     else:
         # Unknown method: fall back to ALS with a warning-safe default
         return als_baseline(y, lam=lam, p=p, niter=niter)
