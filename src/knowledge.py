@@ -87,12 +87,12 @@ class KnowledgeBase:
     ----------
     paths : list of path-like, optional
         JSON files to load (merged).  Defaults to the bundled
-        ``knowledge_base.json`` + ``knowledge_extended.json``.
+        ``knowledge_base.json`` only (carbon-only active base).
     """
 
     def __init__(self, paths: Optional[List[Union[str, Path]]] = None):
         if paths is None:
-            paths = [p for p in (_DEFAULT_KB, _DEFAULT_EXT) if p.exists()]
+            paths = [p for p in [_DEFAULT_KB] if p.exists()]
         self._entries: List[Entry] = []
         for p in paths:
             self._load(Path(p))
@@ -112,8 +112,8 @@ class KnowledgeBase:
         metric: Optional[str] = None,
         material: Optional[str] = None,
         laser_nm: Optional[float] = None,
-        kind: Optional[str] = None,          # "numeric" | "range" | None
-        confidence: Optional[str] = None,    # "strong" | "suggestive" | "weak"
+        kind: Optional[str] = None,
+        confidence: Optional[str] = None,
         defect_type: Optional[str] = None,
     ) -> List[Entry]:
         out = []
@@ -161,7 +161,7 @@ class KnowledgeBase:
 
     def defect_type_ladder(self) -> Dict[str, List[Entry]]:
         """
-        Return a dict mapping defect_type → list of I_D/I_D' entries.
+        Return a dict mapping defect_type -> list of I_D/I_D' entries.
         """
         ladder: Dict[str, List[Entry]] = {}
         for e in self.query(metric="I_D/I_D'", kind="numeric"):
@@ -177,21 +177,12 @@ class KnowledgeBase:
         """
         Estimate defect inter-distance L_D (nm) from I_D/I_G using
         the Lucchese / Cancado formula.
-
-        Returns None if no suitable calibration entry found.
         """
-        entries = self.query(metric="L_D", kind="numeric")
-        if not entries:
-            return None
-        # Lucchese 2010 formula:  I_D/I_G = C_A / L_D^2  (Stage 2)
-        # We use a stored C_lambda value if available, else approximate.
         cl_entries = self.query(metric="C_lambda", kind="numeric")
         if cl_entries:
-            # pick entry whose laser_nm is closest
             cl_entries.sort(key=lambda x: abs((x.laser_nm() or 514) - laser_nm))
             c_lambda = cl_entries[0].value
         else:
-            # Cancado 2011 approximation: C_lambda ≈ (1.8e-9) * lambda_L^4
             c_lambda = 1.8e-9 * (laser_nm ** 4)
         try:
             ld = math.sqrt(c_lambda / idig)
@@ -228,9 +219,40 @@ class KnowledgeBase:
             f"KnowledgeBase  ({len(self._entries)} entries)",
             f"  metrics   : {', '.join(metrics)}",
             f"  materials : {', '.join(materials[:10])}"
-            + (" …" if len(materials) > 10 else ""),
+            + (" ..." if len(materials) > 10 else ""),
         ]
         return "\n".join(lines)
 
     def __repr__(self) -> str:
         return f"KnowledgeBase({len(self._entries)} entries)"
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+# ── module-level singletons (lazy) ────────────────────────────────────────────
+_ACTIVE: Optional[KnowledgeBase] = None
+_EXTENDED: Optional[KnowledgeBase] = None
+
+
+def active() -> KnowledgeBase:
+    """Return the active (carbon-only) knowledge base singleton."""
+    global _ACTIVE
+    if _ACTIVE is None:
+        _ACTIVE = KnowledgeBase(paths=[_DEFAULT_KB] if _DEFAULT_KB.exists() else [])
+    return _ACTIVE
+
+
+def extended() -> KnowledgeBase:
+    """Return extended knowledge base (SiC/MXene/SWNT etc.), loaded on demand."""
+    global _EXTENDED
+    if _EXTENDED is None:
+        _EXTENDED = KnowledgeBase(paths=[_DEFAULT_EXT] if _DEFAULT_EXT.exists() else [])
+    return _EXTENDED
+
+
+def reset_singletons() -> None:
+    """Reset cached singletons (useful for testing)."""
+    global _ACTIVE, _EXTENDED
+    _ACTIVE = None
+    _EXTENDED = None
