@@ -99,7 +99,6 @@ Covalent aryl functionalization of graphene is substrate-dependent [Dierke 2022]
 - **Defect density** — L_D (Cançado 2011, full E_L⁴ correction)
 - **g-C₃N₄ CN-mode detection** — dedicated `CN_triazine` (~691 cm⁻¹) and `CN_bending` (~988 cm⁻¹) windows for UV/NIR-friendly Raman analysis
 - **g-C₃N₄ report logic** — `gcn4_detected` flag plus `gcn4_mode_note` warning for visible excitation
-- **Doping estimator correction** — `carrier_density_cm2` scaling fixed to remove an erroneous extra factor of `10^12`
 - **Disorder stage** — Stage 1 / Stage 2 classification with FWHM(G) cross-check
 - **Defect type classification** — sp³ / vacancy / edge via I_D/I_D′ [Eckmann 2012]
 - **Layer number estimation** — from I_2D/I_G with FWHM(2D) reliability guard
@@ -114,6 +113,8 @@ Covalent aryl functionalization of graphene is substrate-dependent [Dierke 2022]
 
 | Peak | Search Range | Fit Window | Line Shape | Physical Origin |
 |------|-------------|------------|------------|-----------------|
+| CN_triazine | 670–715 cm⁻¹ | fixed | Lorentzian | g-C₃N₄ triazine ring mode (~691 cm⁻¹) |
+| CN_bending  | 960–1010 cm⁻¹ | fixed | Lorentzian | g-C₃N₄ C–N bending / ring-related mode (~988 cm⁻¹) |
 | D*   | 1080–1230 cm⁻¹ | fixed | Lorentzian | sp³/sp² boundary; OH/epoxy groups in GO/rGO [Lee 2021] |
 | D    | 1270–1450 cm⁻¹ | fixed | Lorentzian | K-point phonon, intervalley double resonance [Ferrari 2001] |
 | G    | 1540–1680 cm⁻¹ (search) | adaptive ±50 cm⁻¹ | Lorentzian | E₂g in-plane C–C stretch [Tuinstra 1970] |
@@ -121,10 +122,12 @@ Covalent aryl functionalization of graphene is substrate-dependent [Dierke 2022]
 | 2D   | 2580–2780 cm⁻¹ | fixed | Lorentzian (or dual) | Second-order overtone; layer-sensitive [Ferrari 2006] |
 | D+G  | 2850–2960 cm⁻¹ | fixed | Pseudo-Voigt | Combination band |
 
+
 > **G-band strategy:** `find_peaks` in 1540–1680 cm⁻¹ → adaptive ±50 cm⁻¹ window → single Lorentzian. If R² < 0.60, dual-Lorentzian G+D′ deconvolution is triggered automatically. The D′ component is stored in `PeakResult.deconv_partner` and promoted to the `D_prime` result slot if it outperforms the standalone fit.
 
-> Peak positions shift with laser wavelength. Dispersive peaks: D ~53 cm⁻¹/eV, D′ ~37 cm⁻¹/eV, 2D ~106 cm⁻¹/eV (Cançado 2011, eV-based).
+> Peak positions shift with laser wavelength for dispersive graphene bands. Dispersive peaks: D ~53 cm⁻¹/eV, D′ ~37 cm⁻¹/eV, 2D ~106 cm⁻¹/eV (Cançado 2011, eV-based). The g-C₃N₄ `CN_triazine` and `CN_bending` windows are treated as non-dispersive auxiliary modes.
 
+---
 ---
 
 ## Quantitative Metrics
@@ -134,7 +137,7 @@ Covalent aryl functionalization of graphene is substrate-dependent [Dierke 2022]
 Inter-defect distance L_D (nm) from the laser-energy-corrected Cançado 2011 formula:
 
 ```
-L_D² (nm²) = (4.3 × 10³ / E_L⁴) × (I_G / I_D)
+L_D² (nm²) = (4.3 × 10³ / E_L⁴) × (A_G / A_D)
 ```
 
 where E_L is the laser energy in eV. Valid in **Stage 1 only** (L_D ≳ 10 nm). Applied to B-doped graphene, where substitutional B atoms behave as vacancy-like scatterers, this yields L_D ≈ 4.76 nm for 0.22 at% B [Kim 2012]. In Stage 2, L_D is set to `NaN` with a warning.
@@ -290,12 +293,12 @@ Dual-Lorentzian deconvolution may not fully separate G and D′ in extreme cases
 | Feature | Scientific Basis | Priority |
 |---------|-----------------|----------|
 | **D* band quantification** | I_D*/I_G ↔ C/O ratio in GO/rGO; oxidation degree tracking [Lee 2021] | 🔴 High |
-| **B-doping fingerprint flag** | Auto-detect: constant G position + I_D/I_D′ ≈ 7 + I_D/I_G ≫ 1 [Kim 2012] | 🔴 High |
+| **B-doping fingerprint flag** | Auto-detect: constant G position + I_D/I_D′ ≈ 7 + I_D/I_G ≫ 1 [Kim 2012] | ✅ Implemented |
 | **Fitting uncertainty (scipy)** | Error bars from covariance matrix for all users (no lmfit required) | 🔴 High |
 | **Multi-Lorentzian 2D fitting** | 4-component decomposition for bilayer/trilayer [Ferrari 2006] | 🟡 Medium |
-| **Carrier-density estimator refinement** | G-band shift → carrier density → n/p doping type; scaling bug fixed in current main branch | 🟢 Implemented / refine |
+| **Carrier-density estimator refinement** | G-band shift → carrier density → n/p doping type; scaling bug corrected in current main branch | ✅ Implemented (further refinement possible) |
 | **Stage boundary refinement** | FWHM(G) + A_D/A_G combined metric; 0D vs. 1D defect discrimination [Wu 2018] | 🟡 Medium |
-| **Dispersion slope validator** | Multi-wavelength: D slope ≈ 53 cm⁻¹/eV, 2D ≈ 106 cm⁻¹/eV; deviation flags contamination [Cançado 2011] | 🟡 Medium |
+| **Dispersion slope validator** | Multi-wavelength: D slope ≈ 53 cm⁻¹/eV, 2D ≈ 106 cm⁻¹/eV; deviation flags contamination [Cançado 2011] | ✅ Implemented |
 | **arPLS baseline** | Asymmetrically reweighted PLS for fluorescence-heavy spectra (GO, g-C₃N₄) | 🟡 Medium |
 | **NIR/UV mode for g-C₃N₄** | Dedicated windows at 691/988 cm⁻¹; analyzer warning/note for visible excitation [Zinin 2009] | ✅ Implemented |
 | **Batch statistics** | Mean ± std across all samples; ratio heatmap for batch runs | 🟢 Planned |
@@ -350,10 +353,9 @@ Plain text: H.J (2026). *Raman Spectrum Analyzer*. Zenodo. https://doi.org/10.52
 - Tuinstra, F. & Koenig, J.L. (1970) *J. Chem. Phys.* **53**, 1126
 - Ferrari, A.C. & Robertson, J. (2001) *Phys. Rev. B* **64**, 075414 — disorder stage classification
 - Ferrari, A.C. et al. (2006) *Phys. Rev. Lett.* **97**, 187401 — 2D band and layer number
-- Lucchese, M.M. et al. (2010) *Carbon* **48**, 1592 — L_D from I_D/I_G
+- - Lucchese, M.M. et al. (2010) *Carbon* **48**, 1592 — defect-density / inter-defect-distance framework for disordered graphene
 - Cançado, L.G. et al. (2011) *Nano Lett.* **11**, 3190–3196 — E_L⁴-corrected L_D; eV-based dispersion
 - Ferrari, A.C. & Basko, D.M. (2013) *Nature Nanotechnology* **8**, 235–246 — peak conventions & line shapes
-- Wu, J.-B. et al. (2018) *Nature Reviews Physics* **1**, 112–122 — double resonance mechanism; dispersion slopes
 
 ### Defect Characterisation
 - Eckmann, A. et al. (2012) *Nano Lett.* **12**, 3925–3930 — I_D/I_D′ defect type discrimination
