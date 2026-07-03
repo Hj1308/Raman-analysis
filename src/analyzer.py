@@ -279,6 +279,7 @@ class RamanAnalysis:
     L_D_note:            str   = ""
     disorder_stage:      str   = "N/A"
     defect_type:         str   = "N/A"
+    defect_type_range_note: str = ""
     estimated_layers:    str   = "N/A"
     twoD_fwhm_warning:   bool  = False
     G_found:             bool  = False
@@ -674,6 +675,9 @@ def analyze(
             )
 
     # ── Defect type (Eckmann et al. 2012) ─────────────────
+    # Primary label uses the three classic Eckmann regimes; a knowledge-base
+    # lookup (when available) adds a citation-anchored RANGE note that flags
+    # borderline values instead of snapping them to one type (Fix #5 / #8).
     if not np.isnan(result.ID_IDp_height):
         r = result.ID_IDp_height
         if r >= 10:
@@ -682,6 +686,27 @@ def analyze(
             result.defect_type = "Vacancy-type defects (ID/ID\u2032 = {:.1f} \u22487)".format(r)
         else:
             result.defect_type = "Grain boundary/edge defects (ID/ID\u2032 = {:.1f} \u22483.5)".format(r)
+
+        # Optional: enrich with a literature-range assessment from the
+        # knowledge base. Never fatal — if the KB isn't present, keep the
+        # classic label above unchanged.
+        try:
+            from . import knowledge as _kb
+        except Exception:
+            try:
+                import knowledge as _kb  # flat import fallback
+            except Exception:
+                _kb = None
+        if _kb is not None:
+            try:
+                assessment = _kb.active().classify_defect_ratio(
+                    r, laser_nm=laser_nm)
+                if assessment:
+                    result.defect_type_range_note = assessment["summary"]
+                    if assessment["ambiguous"]:
+                        result.defect_type += " [borderline \u2014 see range note]"
+            except Exception:
+                pass
 
     # ── B-doping fingerprint (v2.4 Feature #2) ────────────
     result.boron_doping_flag, result.boron_doping_note = _check_boron_doping(
