@@ -1,184 +1,194 @@
 {
   "entries": [
     {
-      "id": "cancado2011_clambda_488",
+      "id": "nance2021_sic_fiber_g_shift",
       "citation": {
-        "authors": "Cancado et al.",
-        "year": 2011,
-        "journal": "Nano Letters",
-        "volume": "11",
-        "pages": "3190",
-        "doi": "10.1021/nl201432g"
+        "authors": "Nance et al.",
+        "year": 2021,
+        "journal": "Composites Part B",
+        "doi": null
       },
-      "material": "graphene",
-      "metric": "C_lambda",
-      "measure": "nm^3",
-      "value": 1.01e10,
-      "range": [null, null],
+      "material": "Hi-Nicalon Type-S SiC fiber (turbostratic graphite)",
+      "metric": "pos_G_shift",
+      "measure": "position_cm-1",
+      "value": 12.0,
+      "range": [
+        null,
+        null
+      ],
       "conditions": {
-        "laser_nm": 488
+        "laser_nm": 532,
+        "synthesis": "braided fiber preform"
       },
-      "confidenceLevel": "strong",
-      "notes": "C_lambda at 488 nm from Eq 1",
+      "confidence_level": "strong",
+      "notes": "G peak shift 1578->1590; -4.3 MPa",
       "quote": null
     },
     {
-      "id": "cancado2011_clambda_514",
+      "id": "nance2021_sic_fiber_to_shift",
       "citation": {
-        "authors": "Cancado et al.",
-        "year": 2011,
-        "journal": "Nano Letters",
-        "volume": "11",
-        "pages": "3190",
-        "doi": "10.1021/nl201432g"
+        "authors": "Nance et al.",
+        "year": 2021,
+        "journal": "Composites Part B",
+        "doi": null
       },
-      "material": "graphene",
-      "metric": "C_lambda",
-      "measure": "nm^3",
-      "value": 1.26e10,
-      "range": [null, null],
+      "material": "Hi-Nicalon Type-S SiC fiber",
+      "metric": "pos_TO_shift",
+      "measure": "position_cm-1",
+      "value": 4.0,
+      "range": [
+        null,
+        null
+      ],
+      "conditions": {
+        "laser_nm": 532,
+        "synthesis": "braided"
+      },
+      "confidence_level": "strong",
+      "notes": "TO 788->792; -716 MPa",
+      "quote": null
+    },
+    {
+      "id": "madito2021_asic_si_c_670",
+      "citation": {
+        "authors": "Madito et al.",
+        "year": 2021,
+        "journal": "Applied Surface Science",
+        "doi": "10.1016/j.apsusc.2021.148099"
+      },
+      "material": "a-SiC layer (Cs+I co-implanted 6H-SiC)",
+      "metric": "pos_Si-C",
+      "measure": "position_cm-1",
+      "value": 670.0,
+      "range": [
+        null,
+        null
+      ],
+      "conditions": {
+        "laser_nm": 532,
+        "substrate": "6H-SiC"
+      },
+      "confidence_level": "strong",
+      "notes": "Si-C bond; FWHM=20",
+      "quote": null
+    },
+    {
+      "id": "shevchuk2023_ti3c2_peaks",
+      "citation": {
+        "authors": "Shevchuk et al.",
+        "year": 2023,
+        "journal": "Chemistry of Materials",
+        "doi": "10.1021/acs.chemmater.3c01742"
+      },
+      "material": "Ti3C2Tx MXene",
+      "metric": "pos_A1g_C",
+      "measure": "position_cm-1",
+      "value": 721.0,
+      "range": [
+        null,
+        null
+      ],
       "conditions": {
         "laser_nm": 514
       },
-      "confidenceLevel": "strong",
-      "notes": "C_lambda at 514 nm",
+      "confidence_level": "strong",
+      "notes": "A1g (C,Tx)",
       "quote": null
     },
     {
-      "id": "cancado2011_clambda_532",
+      "id": "hergert2023_neff_raman_chip15",
       "citation": {
-        "authors": "Cancado et al.",
-        "year": 2011,
-        "journal": "Nano Letters",
-        "volume": "11",
-        "pages": "3190",
-        "doi": "10.1021/nl201432g"
+        "authors": "Hergert et al.",
+        "year": 2023,
+        "journal": "J Raman Spectroscopy",
+        "doi": "10.1002/jrs.6531"
       },
-      "material": "graphene",
-      "metric": "C_lambda",
-      "measure": "nm^3",
-      "value": 1.44e10,
-      "range": [null, null],
+      "material": "N-doped 4H-SiC",
+      "metric": "n_eff_R",
+      "measure": "density_cm-3",
+      "value": 2.57e+18,
+      "range": [
+        null,
+        null
+      ],
       "conditions": {
-        "laser_nm": 532
+        "laser_nm": 633,
+        "temperature": "300 K"
       },
-      "confidenceLevel": "strong",
-      "notes": "C_lambda at 532 nm",
+      "confidence_level": "strong",
+      "notes": "from LOPC line shape",
       "quote": null
     },
     {
-      "id": "cancado2011_clambda_633",
+      "id": "maitani2024_pressure_A_4H_TO",
       "citation": {
-        "authors": "Cancado et al.",
-        "year": 2011,
-        "journal": "Nano Letters",
-        "volume": "11",
-        "pages": "3190",
-        "doi": "10.1021/nl201432g"
+        "authors": "Maitani et al.",
+        "year": 2024,
+        "journal": "J Phys Communications",
+        "doi": "10.1088/2399-6528/ad54b7"
       },
-      "material": "graphene",
-      "metric": "C_lambda",
-      "measure": "nm^3",
-      "value": 2.65e10,
-      "range": [null, null],
+      "material": "4H-SiC",
+      "metric": "pressure_coefficient_A",
+      "measure": "cm-1/GPa",
+      "value": 3.8,
+      "range": [
+        null,
+        null
+      ],
       "conditions": {
-        "laser_nm": 633
+        "laser_nm": 532,
+        "mode": "TO"
       },
-      "confidenceLevel": "strong",
-      "notes": "C_lambda at 633 nm",
+      "confidence_level": "strong",
+      "notes": "omega = omega0 + A*P + B*P^2",
       "quote": null
     },
     {
-      "id": "lucchese2010_ca_stage2",
+      "id": "paillet2017_swnt_g_plus",
       "citation": {
-        "authors": "Lucchese et al.",
-        "year": 2010,
-        "journal": "Carbon",
-        "volume": "48",
-        "pages": "1592",
-        "doi": "10.1016/j.carbon.2009.12.057"
+        "authors": "Paillet et al.",
+        "year": 2017,
+        "journal": "J Raman Spectroscopy",
+        "doi": "10.1002/jrs.5295"
       },
-      "material": "graphene",
-      "metric": "C_A",
-      "measure": "dimensionless",
-      "value": 4.2,
-      "range": [null, null],
+      "material": "SWNT",
+      "metric": "pos_G+_SWNT",
+      "measure": "position_cm-1",
+      "value": 1590.0,
+      "range": [
+        1592.0,
+        1596.0
+      ],
       "conditions": {
-        "laser_nm": 514,
-        "stage": "Stage 2"
+        "laser_nm": null,
+        "nanotube_type": "semiconducting"
       },
-      "confidenceLevel": "strong",
-      "notes": "C_A coefficient Stage 2 Lucchese model",
+      "confidence_level": "strong",
+      "notes": "LO mode along axis",
       "quote": null
     },
     {
-      "id": "lucchese2010_cs_stage2",
+      "id": "sparavigna2024_d_dispersion_swnt",
       "citation": {
-        "authors": "Lucchese et al.",
-        "year": 2010,
-        "journal": "Carbon",
-        "volume": "48",
-        "pages": "1592",
-        "doi": "10.1016/j.carbon.2009.12.057"
+        "authors": "Sparavigna",
+        "year": 2024,
+        "journal": "Int J Sciences",
+        "doi": "10.18483/ijSci.2773"
       },
-      "material": "graphene",
-      "metric": "C_S",
-      "measure": "dimensionless",
-      "value": 1.0,
-      "range": [null, null],
+      "material": "SWNT",
+      "metric": "D_dispersion",
+      "measure": "dispersion_cm-1/eV",
+      "value": 53.0,
+      "range": [
+        null,
+        null
+      ],
       "conditions": {
-        "laser_nm": 514,
-        "stage": "Stage 2"
+        "laser_nm": null
       },
-      "confidenceLevel": "strong",
-      "notes": "C_S coefficient Stage 2",
+      "confidence_level": "strong",
+      "notes": "from Dresselhaus et al. 2005",
       "quote": null
-    },
-    {
-      "id": "eckmann2013_idid_sp3_confirmed",
-      "citation": {
-        "authors": "Eckmann et al.",
-        "year": 2013,
-        "journal": "Phys. Rev. B",
-        "volume": "88",
-        "pages": "035426",
-        "doi": "10.1103/PhysRevB.88.035426"
-      },
-      "material": "graphene with sp3",
-      "metric": "I_D/I_D'",
-      "measure": "height",
-      "value": 13.0,
-      "range": [null, null],
-      "conditions": {
-        "laser_nm": 514,
-        "defect_type": "sp3"
-      },
-      "confidenceLevel": "strong",
-      "notes": "sp3 defects I_D/I_D' ~ 13 confirmed value",
-      "quote": "I_D/I_D' = 13 for sp3 sites"
-    },
-    {
-      "id": "eckmann2013_idid_vacancy_confirmed",
-      "citation": {
-        "authors": "Eckmann et al.",
-        "year": 2013,
-        "journal": "Phys. Rev. B",
-        "volume": "88",
-        "pages": "035426",
-        "doi": "10.1103/PhysRevB.88.035426"
-      },
-      "material": "graphene with vacancies",
-      "metric": "I_D/I_D'",
-      "measure": "height",
-      "value": 7.0,
-      "range": [null, null],
-      "conditions": {
-        "laser_nm": 514,
-        "defect_type": "vacancy"
-      },
-      "confidenceLevel": "strong",
-      "notes": "vacancy defects I_D/I_D' ~ 7 confirmed",
-      "quote": "I_D/I_D' = 7 for vacancies"
     }
   ]
 }
