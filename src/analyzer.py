@@ -416,7 +416,7 @@ def _estimate_doping(
 
     # n [×10¹² cm⁻²] = (Δω_G / α)²
     n_1e12 = (abs(delta_g) / _ALPHA_PISANA) ** 2
-    n_cm2  = n_1e12 * 1e12
+    n_cm2  = n_1e12
 
     # ── n/p-type classification ─────────────────────────────
     if is_non_graphene:
