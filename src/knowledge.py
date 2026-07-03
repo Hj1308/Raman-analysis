@@ -1,236 +1,287 @@
 """
-knowledge.py  –  Raman literature knowledge-base access layer
+knowledge.py — Literature reference knowledge base for Raman-analysis.
+
+Exposes a query API so the rest of the app can look up published reference
+values with citation + measurement conditions, and compare measured quantities
+against the literature range for validation.
+
+Kinds:
+  "numeric"     : has a concrete value or range
+  "formula"     : encodes a formula in notes
+  "qualitative" : direction/trend only
 """
 from __future__ import annotations
 
 import json
-import math
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Optional
 
-# ── default file locations ────────────────────────────────────────────────────
-_HERE = Path(__file__).parent
-_DEFAULT_KB   = _HERE / "knowledge_base.json"
-_DEFAULT_EXT  = _HERE / "knowledge_extended.json"
+_CONF_RANK = {"strong": 3, "suggestive": 2, "weak": 1}
 
 
-# ── data model ────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------- #
+# Entry model
+# --------------------------------------------------------------------------- #
 @dataclass
-class Entry:
+class RefEntry:
     id: str
-    citation: Dict[str, Any]
     material: str
     metric: str
     measure: str
     value: Optional[float]
-    range: Tuple[Optional[float], Optional[float]]
-    conditions: Dict[str, Any]
+    range: list
+    conditions: dict
     confidence_level: str
     notes: str
     quote: Optional[str]
-    stage: Optional[str] = None
-
-    # derived
-    @property
-    def authors(self) -> str:
-        return self.citation.get("authors", "")
+    citation: dict = field(default_factory=dict)
 
     @property
-    def year(self) -> Optional[int]:
-        return self.citation.get("year")
+    def kind(self) -> str:
+        """'numeric' | 'formula' | 'qualitative'."""
+        if self.value is not None or (self.range and self.range != [None, None]):
+            return "numeric"
+        n = (self.notes or "").lower()
+        if "formula" in n or "=" in (self.notes or ""):
+            return "formula"
+        return "qualitative"
 
     @property
-    def doi(self) -> Optional[str]:
-        return self.citation.get("doi")
-
-    def is_numeric(self) -> bool:
-        return self.value is not None
-
-    def is_range(self) -> bool:
-        return any(v is not None for v in self.range)
-
-    def laser_nm(self) -> Optional[float]:
+    def laser_nm(self):
         return (self.conditions or {}).get("laser_nm")
 
-    def defect_type(self) -> Optional[str]:
-        return (self.conditions or {}).get("defect_type")
+    def cite_short(self) -> str:
+        c = self.citation or {}
+        a = c.get("authors", "?")
+        y = c.get("year", "")
+        return f"{a} ({y})".strip()
+
+    def describe(self) -> str:
+        """One-line, citation-anchored, condition-aware description."""
+        cond = []
+        if self.laser_nm:
+            cond.append(f"{self.laser_nm} nm")
+        else:
+            cond.append("laser-agnostic")
+        for k in ("dopant_concentration", "substrate", "stage", "defect_type"):
+            v = (self.conditions or {}).get(k)
+            if v:
+                cond.append(str(v))
+        cond_s = ", ".join(cond)
+        if self.value is not None:
+            val = f"{self.value:g} {self.measure}"
+        elif self.range and self.range != [None, None]:
+            lo, hi = self.range
+            val = f"{lo}\u2013{hi} {self.measure}"
+        else:
+            val = self.notes or "(formula/qualitative)"
+        return (
+            f"{self.metric} = {val} [{self.cite_short()}; {cond_s}; "
+            f"{self.confidence_level}]"
+        )
 
 
-def _parse_entry(raw: dict) -> Entry:
-    cit = raw.get("citation", {})
-    rng = raw.get("range", [None, None]) or [None, None]
-    conds = raw.get("conditions", {}) or {}
-    return Entry(
-        id=raw["id"],
-        citation=cit,
-        material=raw.get("material", ""),
-        metric=raw.get("metric", ""),
-        measure=raw.get("measure", ""),
-        value=raw.get("value"),
-        range=(rng[0], rng[1]),
-        conditions=conds,
-        confidence_level=raw.get("confidenceLevel", raw.get("confidence_level", "")),
-        notes=raw.get("notes", "") or "",
-        quote=raw.get("quote"),
-        stage=raw.get("stage") or conds.get("stage"),
-    )
-
-
-# ── main class ────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------- #
+# Knowledge base
+# --------------------------------------------------------------------------- #
 class KnowledgeBase:
-    """
-    Thin wrapper around the Raman literature JSON knowledge-base.
+    def __init__(self, entries: List[RefEntry]):
+        self.entries = entries
 
-    Parameters
-    ----------
-    paths : list of path-like, optional
-        JSON files to load (merged).  Defaults to the bundled
-        ``knowledge_base.json`` only (carbon-only active base).
-    """
+    # ---- loading ----
+    @classmethod
+    def _resolve(cls, filename: str) -> Optional[str]:
+        here = os.path.dirname(os.path.abspath(__file__))
+        for cand in (
+            os.path.join(here, filename),
+            os.path.join(here, "..", filename),
+            os.path.join(os.getcwd(), filename),
+        ):
+            if os.path.exists(cand):
+                return cand
+        return None
 
-    def __init__(self, paths: Optional[List[Union[str, Path]]] = None):
-        if paths is None:
-            paths = [p for p in [_DEFAULT_KB] if p.exists()]
-        self._entries: List[Entry] = []
-        for p in paths:
-            self._load(Path(p))
+    @classmethod
+    def load(cls, filename: str = "knowledge_base.json") -> "KnowledgeBase":
+        path = cls._resolve(filename)
+        if path is None:
+            return cls([])  # empty base is valid
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        entries = []
+        for e in doc.get("entries", []):
+            entries.append(
+                RefEntry(
+                    id=e.get("id", ""),
+                    material=e.get("material", ""),
+                    metric=e.get("metric", ""),
+                    measure=e.get("measure", ""),
+                    value=e.get("value"),
+                    range=e.get("range", [None, None]),
+                    conditions=e.get("conditions", {}) or {},
+                    confidence_level=e.get("confidence_level", "weak"),
+                    notes=e.get("notes", "") or "",
+                    quote=e.get("quote"),
+                    citation=e.get("citation", {}) or {},
+                )
+            )
+        return cls(entries)
 
-    # ── loading ──────────────────────────────────────────────────────────────
-    def _load(self, path: Path) -> None:
-        if not path.exists():
-            raise FileNotFoundError(f"Knowledge-base file not found: {path}")
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        for raw in data.get("entries", []):
-            self._entries.append(_parse_entry(raw))
-
-    # ── querying ─────────────────────────────────────────────────────────────
+    # ---- queries ----
     def query(
         self,
-        metric: Optional[str] = None,
-        material: Optional[str] = None,
-        laser_nm: Optional[float] = None,
-        kind: Optional[str] = None,
-        confidence: Optional[str] = None,
-        defect_type: Optional[str] = None,
-    ) -> List[Entry]:
+        metric=None,
+        material=None,
+        measure=None,
+        laser_nm=None,
+        kind=None,
+        min_confidence=None,
+    ) -> List[RefEntry]:
+        """Filter entries. Substring match on metric/material (case-insensitive)."""
         out = []
-        for e in self._entries:
-            if metric and e.metric != metric:
+        minrank = _CONF_RANK.get(min_confidence, 0) if min_confidence else 0
+        for e in self.entries:
+            if metric and metric.lower() not in e.metric.lower():
                 continue
             if material and material.lower() not in e.material.lower():
                 continue
-            if laser_nm and e.laser_nm() != laser_nm:
+            if measure and measure.lower() != e.measure.lower():
                 continue
-            if kind == "numeric" and not e.is_numeric():
+            if laser_nm is not None and e.laser_nm is not None and e.laser_nm != laser_nm:
                 continue
-            if kind == "range" and not e.is_range():
+            if kind and e.kind != kind:
                 continue
-            if confidence and e.confidence_level != confidence:
-                continue
-            if defect_type and e.defect_type() != defect_type:
+            if _CONF_RANK.get(e.confidence_level, 0) < minrank:
                 continue
             out.append(e)
+        out.sort(key=lambda e: _CONF_RANK.get(e.confidence_level, 0), reverse=True)
         return out
 
-    def get(self, entry_id: str) -> Optional[Entry]:
-        for e in self._entries:
-            if e.id == entry_id:
-                return e
-        return None
+    def reference_range(self, metric, material=None, measure=None, laser_nm=None):
+        """Aggregate a plausible literature range for a metric.
 
-    @property
-    def entries(self) -> List[Entry]:
-        return list(self._entries)
-
-    # ── convenience methods ──────────────────────────────────────────────────
-    def idig_values(
-        self,
-        material_filter: Optional[str] = None,
-        laser_nm: Optional[float] = None,
-    ) -> List[Entry]:
-        return self.query(metric="I_D/I_G", material=material_filter, laser_nm=laser_nm)
-
-    def i2dig_values(
-        self,
-        material_filter: Optional[str] = None,
-    ) -> List[Entry]:
-        return self.query(metric="I_2D/I_G", material=material_filter)
-
-    def defect_type_ladder(self) -> Dict[str, List[Entry]]:
+        Returns (lo, hi, supporting_entries). Returns (None, None, []) if
+        nothing numeric matches.
         """
-        Return a dict mapping defect_type -> list of I_D/I_D' entries.
-        """
-        ladder: Dict[str, List[Entry]] = {}
-        for e in self.query(metric="I_D/I_D'", kind="numeric"):
-            dt = e.defect_type() or "unknown"
-            ladder.setdefault(dt, []).append(e)
-        return ladder
-
-    def ld_from_idig(
-        self,
-        idig: float,
-        laser_nm: float = 514.0,
-    ) -> Optional[float]:
-        """
-        Estimate defect inter-distance L_D (nm) from I_D/I_G using
-        the Lucchese / Cancado formula.
-        """
-        cl_entries = self.query(metric="C_lambda", kind="numeric")
-        if cl_entries:
-            cl_entries.sort(key=lambda x: abs((x.laser_nm() or 514) - laser_nm))
-            c_lambda = cl_entries[0].value
-        else:
-            c_lambda = 1.8e-9 * (laser_nm ** 4)
-        try:
-            ld = math.sqrt(c_lambda / idig)
-            return ld
-        except (ZeroDivisionError, ValueError):
-            return None
-
-    def la_from_idig(
-        self,
-        idig: float,
-        laser_nm: float = 514.0,
-    ) -> Optional[float]:
-        """
-        Estimate crystallite size L_a (nm) from I_D/I_G using Tuinstra-Koenig
-        / Cancado formula.
-        """
-        cl_entries = self.query(metric="C_lambda", kind="numeric")
-        if cl_entries:
-            cl_entries.sort(key=lambda x: abs((x.laser_nm() or 514) - laser_nm))
-            c_lambda = cl_entries[0].value
-        else:
-            c_lambda = 1.8e-9 * (laser_nm ** 4)
-        try:
-            la = (2.4e-10 * (laser_nm ** 4)) / idig
-            return la
-        except ZeroDivisionError:
-            return None
-
-    # ── summary helpers ──────────────────────────────────────────────────────
-    def summary(self) -> str:
-        metrics = sorted({e.metric for e in self._entries})
-        materials = sorted({e.material for e in self._entries})
-        lines = [
-            f"KnowledgeBase  ({len(self._entries)} entries)",
-            f"  metrics   : {', '.join(metrics)}",
-            f"  materials : {', '.join(materials[:10])}"
-            + (" ..." if len(materials) > 10 else ""),
+        matches = [
+            e
+            for e in self.query(
+                metric=metric, material=material, measure=measure,
+                laser_nm=laser_nm, kind="numeric"
+            )
         ]
-        return "\n".join(lines)
+        vals = []
+        for e in matches:
+            if e.value is not None:
+                vals.append(e.value)
+            if e.range and e.range != [None, None]:
+                lo, hi = e.range
+                if lo is not None:
+                    vals.append(lo)
+                if hi is not None:
+                    vals.append(hi)
+        if not vals:
+            return None, None, []
+        return min(vals), max(vals), matches
 
-    def __repr__(self) -> str:
-        return f"KnowledgeBase({len(self._entries)} entries)"
+    def defect_type_ladder(self, laser_nm=None):
+        """Return Eckmann I_D/I_D' defect-type reference points, sorted.
 
-    def __len__(self) -> int:
-        return len(self._entries)
+        Returns [(value, defect_type, entry), ...]
+        """
+        out = []
+        for e in self.query(metric="I_D/I_D'", kind="numeric", laser_nm=laser_nm):
+            dt = (e.conditions or {}).get("defect_type")
+            if e.value is not None and dt:
+                out.append((e.value, dt, e))
+        out.sort(key=lambda t: t[0])
+        return out
+
+    def classify_defect_ratio(self, ratio, laser_nm=None, tol=0.15):
+        """Locate a measured I_D/I_D' on the Eckmann ladder.
+
+        Returns a dict with keys: ratio, position, lower, upper, nearest,
+        ambiguous, summary.  Returns None if no ladder entries or ratio is None.
+        """
+        raw = self.defect_type_ladder(laser_nm=laser_nm)
+        if not raw or ratio is None:
+            return None
+
+        # collapse duplicate defect types to mean value
+        by_type: dict = {}
+        for v, dt, e in raw:
+            by_type.setdefault(dt, []).append((v, e))
+        pts = []
+        for dt, items in by_type.items():
+            mean_v = sum(v for v, _ in items) / len(items)
+            pts.append((mean_v, dt, items[0][1]))
+        pts.sort(key=lambda t: t[0])
+
+        lower = None
+        upper = None
+        for p in pts:
+            if p[0] <= ratio:
+                lower = p
+            if p[0] >= ratio and upper is None:
+                upper = p
+        nearest = min(pts, key=lambda p: abs(p[0] - ratio))
+
+        if lower and upper and lower[1] != upper[1]:
+            position = "between"
+            span = upper[0] - lower[0]
+            frac = (ratio - lower[0]) / span if span > 0 else 0.0
+            ambiguous = (0.5 - tol <= frac <= 0.5 + tol) or (0.2 < frac < 0.8)
+        elif lower and not upper:
+            position = "above"
+            ambiguous = False
+        elif upper and not lower:
+            position = "below"
+            ambiguous = False
+        else:
+            position = "at"
+            ambiguous = False
+
+        def _fmt(p):
+            return f"{p[1]} (~{p[0]:.1f}, {p[2].cite_short()})"
+
+        if position == "between":
+            summary = (
+                f"I_D/I_D' = {ratio:.1f} lies between "
+                f"{_fmt(lower)} and {_fmt(upper)}"
+            )
+            if ambiguous:
+                summary += " \u2014 borderline, assignment uncertain"
+        elif position == "above":
+            summary = (
+                f"I_D/I_D' = {ratio:.1f} is at/above the highest "
+                f"reference point {_fmt(lower)}"
+            )
+        elif position == "below":
+            summary = (
+                f"I_D/I_D' = {ratio:.1f} is below the lowest "
+                f"reference point {_fmt(upper)}"
+            )
+        else:
+            summary = f"I_D/I_D' = {ratio:.1f} matches {_fmt(nearest)}"
+
+        return {
+            "ratio": ratio,
+            "position": position,
+            "lower": lower,
+            "upper": upper,
+            "nearest": nearest,
+            "ambiguous": ambiguous,
+            "summary": summary,
+        }
+
+    def __len__(self):
+        return len(self.entries)
 
 
-# ── module-level singletons (lazy) ────────────────────────────────────────────
+# --------------------------------------------------------------------------- #
+# Module-level singletons (lazy)
+# --------------------------------------------------------------------------- #
 _ACTIVE: Optional[KnowledgeBase] = None
 _EXTENDED: Optional[KnowledgeBase] = None
 
@@ -239,20 +290,20 @@ def active() -> KnowledgeBase:
     """Return the active (carbon-only) knowledge base singleton."""
     global _ACTIVE
     if _ACTIVE is None:
-        _ACTIVE = KnowledgeBase(paths=[_DEFAULT_KB] if _DEFAULT_KB.exists() else [])
+        _ACTIVE = KnowledgeBase.load("knowledge_base.json")
     return _ACTIVE
 
 
 def extended() -> KnowledgeBase:
-    """Return extended knowledge base (SiC/MXene/SWNT etc.), loaded on demand."""
+    """Non-carbon references (SiC/MXene/SWNT...). Loaded on demand only."""
     global _EXTENDED
     if _EXTENDED is None:
-        _EXTENDED = KnowledgeBase(paths=[_DEFAULT_EXT] if _DEFAULT_EXT.exists() else [])
+        _EXTENDED = KnowledgeBase.load("knowledge_extended.json")
     return _EXTENDED
 
 
 def reset_singletons() -> None:
-    """Reset cached singletons (useful for testing)."""
+    """Reset cached singletons (useful for testing with temp files)."""
     global _ACTIVE, _EXTENDED
     _ACTIVE = None
     _EXTENDED = None
