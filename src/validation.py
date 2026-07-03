@@ -208,16 +208,64 @@ def _check_2D_warning(report, analysis) -> None:
                    f"2D-band caveat: {w}", band="2D")
 
 
+def _check_against_literature(report, peaks, laser_nm=None) -> None:
+    """Cross-check fitted band positions against literature ranges (Fix #8).
+
+    Uses the knowledge base to see whether a fitted G/D/2D position falls far
+    outside the span reported in the literature. A large deviation is flagged
+    as INFO (not an error — it may be genuine strain/doping), pointing the user
+    to double-check. Silently does nothing if the knowledge base is absent.
+    """
+    try:
+        from . import knowledge as _kb
+    except Exception:
+        try:
+            import knowledge as _kb
+        except Exception:
+            return
+    try:
+        kb = _kb.active()
+    except Exception:
+        return
+    if len(kb) == 0:
+        return
+
+    checks = [("G", "pos_G"), ("D", "pos_D"), ("2D", "pos_2D")]
+    for band, metric in checks:
+        pk = peaks.get(band) if band != "2D" else peaks.get("2D")
+        if pk is None or not getattr(pk, "found", False):
+            continue
+        center = getattr(pk, "center", None)
+        if center is None:
+            continue
+        lo, hi, sources = kb.reference_range(metric, laser_nm=laser_nm)
+        if lo is None or not sources:
+            continue
+        # generous tolerance: positions can shift with strain/doping/substrate
+        margin = 30.0  # cm^-1
+        if center < lo - margin or center > hi + margin:
+            report.add(
+                f"{band}_pos_off_literature", Severity.INFO,
+                f"{band} position ({center:.0f} cm\u207b\u00b9) is outside the "
+                f"literature span for {metric} ({lo:.0f}\u2013{hi:.0f} cm\u207b\u00b9, "
+                f"{len(sources)} refs). May reflect genuine strain/doping/"
+                f"substrate effects, or a fit/calibration issue worth checking.",
+                band=band,
+            )
+
+
 # --------------------------------------------------------------------------- #
 # Public API
 # --------------------------------------------------------------------------- #
-def validate(peaks, analysis) -> ValidationReport:
+def validate(peaks, analysis, laser_nm=None) -> ValidationReport:
     """Run all quality-control checks over a completed fit + analysis.
 
     Parameters
     ----------
     peaks    : dict[str, PeakResult] from peak_fitter.fit_all_peaks()
     analysis : RamanAnalysis from analyzer.analyze()
+    laser_nm : optional excitation wavelength; enables literature
+               cross-checks that are laser-dependent (Fix #8).
 
     Returns
     -------
@@ -232,6 +280,7 @@ def validate(peaks, analysis) -> ValidationReport:
     _check_core_bands_found(report, peaks)
     _check_band_center_pinned(report, peaks)
     _check_fit_quality(report, peaks)
+    _check_against_literature(report, peaks, laser_nm=laser_nm)
     if analysis is not None:
         _check_LD_regime(report, analysis)
         _check_ratio_measure_consistency(report, analysis)

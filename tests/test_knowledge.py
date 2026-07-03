@@ -75,6 +75,36 @@ class TestReferenceRange:
         assert lo is None and hi is None and ms == []
 
 
+class TestClassifyDefectRatio:
+    def test_clean_value_matches_type(self):
+        kb = K.active()
+        res = kb.classify_defect_ratio(13.0)
+        assert res is not None
+        assert res["position"] in ("at", "between", "above")
+        assert "sp3" in res["summary"] or "sp\u00b3" in res["summary"]
+
+    def test_borderline_flagged_ambiguous(self):
+        kb = K.active()
+        res = kb.classify_defect_ratio(9.0)  # between vacancy(7) and sp3/divac
+        assert res is not None
+        assert res["position"] == "between"
+        assert res["ambiguous"] is True
+
+    def test_below_ladder(self):
+        kb = K.active()
+        res = kb.classify_defect_ratio(0.3)
+        assert res["position"] == "below"
+
+    def test_above_ladder(self):
+        kb = K.active()
+        res = kb.classify_defect_ratio(50.0)
+        assert res["position"] == "above"
+
+    def test_none_ratio_returns_none(self):
+        kb = K.active()
+        assert kb.classify_defect_ratio(None) is None
+
+
 class TestDescribe:
     def test_describe_has_citation_and_conditions(self):
         kb = K.active()
