@@ -54,8 +54,8 @@ class TestGCN4Analyzer:
                 "CN_triazine", center=691.0, amplitude=80.0,
                 fwhm=16.0, area=1200.0, found=True
             ),
-            "CN_bending": _mock_peak(
-                "CN_bending", center=988.0, amplitude=60.0,
+            "CN_ring_breathing": _mock_peak(
+                "CN_ring_breathing", center=988.0, amplitude=60.0,
                 fwhm=18.0, area=1000.0, found=False
             ),
         }
@@ -68,8 +68,8 @@ class TestGCN4Analyzer:
                 "CN_triazine", center=691.0, amplitude=80.0,
                 fwhm=16.0, area=1200.0, found=True
             ),
-            "CN_bending": _mock_peak(
-                "CN_bending", center=988.0, amplitude=70.0,
+            "CN_ring_breathing": _mock_peak(
+                "CN_ring_breathing", center=988.0, amplitude=70.0,
                 fwhm=18.0, area=1100.0, found=True
             ),
         }
@@ -84,8 +84,8 @@ class TestGCN4Analyzer:
                 "CN_triazine", center=691.0, amplitude=80.0,
                 fwhm=16.0, area=1200.0, found=True
             ),
-            "CN_bending": _mock_peak(
-                "CN_bending", center=988.0, amplitude=70.0,
+            "CN_ring_breathing": _mock_peak(
+                "CN_ring_breathing", center=988.0, amplitude=70.0,
                 fwhm=18.0, area=1100.0, found=True
             ),
         }
@@ -99,8 +99,8 @@ class TestGCN4Analyzer:
                 "CN_triazine", center=691.0, amplitude=80.0,
                 fwhm=16.0, area=1200.0, found=True
             ),
-            "CN_bending": _mock_peak(
-                "CN_bending", center=988.0, amplitude=70.0,
+            "CN_ring_breathing": _mock_peak(
+                "CN_ring_breathing", center=988.0, amplitude=70.0,
                 fwhm=18.0, area=1100.0, found=True
             ),
         }

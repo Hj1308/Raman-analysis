@@ -227,8 +227,8 @@ class TestGCN4Modes:
         w785 = get_peak_windows(785.0)
         assert abs(w532["CN_triazine"][0] - w785["CN_triazine"][0]) < 0.01
         assert abs(w532["CN_triazine"][1] - w785["CN_triazine"][1]) < 0.01
-        assert abs(w532["CN_bending"][0] - w785["CN_bending"][0]) < 0.01
-        assert abs(w532["CN_bending"][1] - w785["CN_bending"][1]) < 0.01
+        assert abs(w532["CN_ring_breathing"][0] - w785["CN_ring_breathing"][0]) < 0.01
+        assert abs(w532["CN_ring_breathing"][1] - w785["CN_ring_breathing"][1]) < 0.01
 
     def test_CN_triazine_found_in_synthetic_gcn4(self, gcn4_wavenumbers, gcn4_spectrum):
         peaks = fit_all_peaks(gcn4_wavenumbers, gcn4_spectrum, laser_nm=785)
@@ -236,8 +236,8 @@ class TestGCN4Modes:
         assert p.found
         assert abs(p.center - 691.0) < 6.0
 
-    def test_CN_bending_found_in_synthetic_gcn4(self, gcn4_wavenumbers, gcn4_spectrum):
+    def test_CN_ring_breathing_found_in_synthetic_gcn4(self, gcn4_wavenumbers, gcn4_spectrum):
         peaks = fit_all_peaks(gcn4_wavenumbers, gcn4_spectrum, laser_nm=785)
-        p = peaks["CN_bending"]
+        p = peaks["CN_ring_breathing"]
         assert p.found
         assert abs(p.center - 988.0) < 8.0

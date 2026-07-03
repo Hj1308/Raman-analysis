@@ -137,7 +137,7 @@ PEAK_WINDOWS_532: Dict[str, Tuple[float, float]] = {
     "DG":          (2850, 2960),
     # Feature #9 — g-C3N4 modes (non-dispersive)
     "CN_triazine": (670, 715),
-    "CN_bending":  (960, 1010),
+    "CN_ring_breathing":  (960, 1010),
 }
 
 # Excitation-energy dispersions (cm⁻¹/eV)
@@ -907,14 +907,14 @@ def fit_all_peaks(
             wn, intensity, *windows["CN_triazine"], "CN_triazine"
         )
 
-    cnben_method = _method("CN_bending")
-    if cnben_method == "lmfit":
-        results["CN_bending"] = _fit_single_band_lmfit(
-            wn, intensity, "CN_bending", band_cfg.get("CN_bending", {}), windows
+    cnbrt_method = _method("CN_ring_breathing")
+    if cnbrt_method == "lmfit":
+        results["CN_ring_breathing"] = _fit_single_band_lmfit(
+            wn, intensity, "CN_ring_breathing", band_cfg.get("CN_ring_breathing", {}), windows
         )
     else:
-        results["CN_bending"] = _fit_peak(
-            wn, intensity, *windows["CN_bending"], "CN_bending"
+        results["CN_ring_breathing"] = _fit_peak(
+            wn, intensity, *windows["CN_ring_breathing"], "CN_ring_breathing"
         )
 
     return results

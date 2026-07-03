@@ -499,11 +499,11 @@ def _refine_stage(
 
 def _check_gcn4_mode(peaks, laser_nm):
     cn_tri = peaks.get("CN_triazine")
-    cn_ben = peaks.get("CN_bending")
+    cn_brt = peaks.get("CN_ring_breathing")
 
     detected = (
         (cn_tri is not None and cn_tri.found)
-        or (cn_ben is not None and cn_ben.found)
+        or (cn_brt is not None and cn_brt.found)
     )
     if not detected:
         return False, ""
