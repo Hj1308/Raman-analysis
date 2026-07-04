@@ -38,6 +38,15 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(__file__))
 from src.loader      import load_spectrum
 from src.baseline    import correct_baseline
+
+# Cosmic-ray removal from the preprocessing adapter layer (RamanSPy's
+# Whitaker–Hayes when installed, modified z-score fallback otherwise).
+# Optional: if the module is missing the app runs exactly as before.
+try:
+    from preprocessing import despike as _despike, Spectrum as _PreSpectrum
+    _HAS_DESPIKE = True
+except Exception:
+    _HAS_DESPIKE = False
 from src.peak_fitter import fit_all_peaks
 from src.analyzer    import analyze, format_report
 
@@ -349,12 +358,27 @@ def analyze_bp(peaks):
 
 
 def run_analysis(wn, intensity, mat_key, group, laser_nm,
-                 baseline_method, als_lam, als_p):
+                 baseline_method, als_lam, als_p, material_label=None):
+    # material_label (e.g. "Reduced Graphene Oxide (rGO)") enables:
+    #   * 'auto' baseline -> asPLS for fluorescent materials (GO/rGO/g-C3N4)
+    #   * adaptive lineshape -> pseudo-Voigt global D/G/D' fit when disordered
+    # Step 0: cosmic-ray removal (spikes are common in real GO/rGO spectra and
+    # corrupt both the baseline fit and peak amplitudes if left in).
+    if _HAS_DESPIKE:
+        try:
+            _clean = _despike(_PreSpectrum(wn, intensity))
+            wn, intensity = _clean.wavenumber, _clean.intensity
+        except Exception:
+            pass  # never let preprocessing kill the analysis
     corrected, baseline_arr = correct_baseline(
-        wn, intensity, method=baseline_method, lam=als_lam, p=als_p
+        wn, intensity, method=baseline_method, lam=als_lam, p=als_p,
+        material=material_label,
     )
+    validation_report = None
     if mat_key in ("graphene", "mxene"):
-        peaks_raw  = fit_all_peaks(wn, corrected, laser_nm=laser_nm)
+        peaks_raw  = fit_all_peaks(wn, corrected, laser_nm=laser_nm,
+                                   adaptive_lineshape="auto",
+                                   material=material_label)
         peaks_dict = {}
         for k, p in peaks_raw.items():
             peaks_dict[k] = {
@@ -374,6 +398,14 @@ def run_analysis(wn, intensity, mat_key, group, laser_nm,
                 "fwhm_stderr":    getattr(p, "fwhm_stderr",   None),
             }
         analysis = analyze_graphene(peaks_raw, laser_nm)
+        # Post-fit quality control (pinned bands, missing cores, literature
+        # cross-check). Non-fatal: any import/runtime issue is swallowed so
+        # the app never breaks because of QC itself.
+        try:
+            from src.validation import validate
+            validation_report = validate(peaks_raw, None, laser_nm=laser_nm)
+        except Exception:
+            validation_report = None
     else:
         peaks_dict = fit_material_peaks(wn, corrected, mat_key)
         if mat_key in ("mos2", "ws2", "mose2", "wse2", "mote2"):
@@ -381,7 +413,7 @@ def run_analysis(wn, intensity, mat_key, group, laser_nm,
         elif mat_key == "hbn": analysis = analyze_hbn(peaks_dict)
         elif mat_key == "bp":  analysis = analyze_bp(peaks_dict)
         else: analysis = {}
-    return peaks_dict, analysis, corrected, baseline_arr
+    return peaks_dict, analysis, corrected, baseline_arr, validation_report
 
 
 # ══════════════════════════════════════════════════════════

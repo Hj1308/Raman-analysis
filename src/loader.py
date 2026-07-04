@@ -33,12 +33,31 @@ def _sort(wn: np.ndarray, inten: np.ndarray):
 
 def load_spectrum(filepath: str) -> tuple:
     """
-    Load a Raman spectrum file (.txt or .csv).
+    Load a Raman spectrum file (.txt or .csv, plus instrument formats).
     Returns: (wavenumber, intensity) as numpy arrays.
+
+    Instrument binary formats (.wdf Renishaw, .spc, WITec exports) are
+    delegated to the preprocessing adapter layer, which uses RamanSPy's
+    loaders when that package is installed. Text/CSV is parsed natively.
     """
     path = Path(filepath)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
+
+    # Instrument formats -> preprocessing adapter (RamanSPy loaders)
+    if path.suffix.lower() in (".wdf", ".spc", ".tvf"):
+        try:
+            import sys as _sys
+            _root = str(path.parent)  # noqa: F841 (kept for clarity)
+            _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from preprocessing import load_spectrum as _pre_load
+            spec = _pre_load(str(path))
+            return _sort(spec.wavenumber, spec.intensity)
+        except Exception as e:
+            raise ValueError(
+                f"Instrument format '{path.suffix}' needs the preprocessing "
+                f"layer (and ideally `pip install ramanspy`): {e}"
+            )
 
     try:
         df = pd.read_csv(
