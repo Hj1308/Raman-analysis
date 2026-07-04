@@ -949,16 +949,17 @@ for i, cfg in enumerate(configs):
         wn, intensity = wn[sort_idx], intensity[sort_idx]
 
         mat_key = _material_key(cfg["group"], cfg["material"])
-        peaks, analysis, corrected, baseline_arr = run_analysis(
+        peaks, analysis, corrected, baseline_arr, validation_report = run_analysis(
             wn, intensity, mat_key, cfg["group"],
             laser_nm, baseline_method, als_lam, als_p
         )
         samples_results.append({
-            **cfg, "mat_key": mat_key,
-            "wn": wn, "intensity": intensity,
-            "baseline": baseline_arr, "corrected": corrected,
-            "peaks": peaks, "analysis": analysis,
-        })
+    **cfg, "mat_key": mat_key,
+    "wn": wn, "intensity": intensity,
+    "baseline": baseline_arr, "corrected": corrected,
+    "peaks": peaks, "analysis": analysis,
+    "validation": validation_report,
+})
     except Exception as e:
         errors.append(f"{cfg['sheet']}: {e}")
     progress.progress((i + 1) / len(configs))
