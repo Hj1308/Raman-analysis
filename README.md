@@ -22,8 +22,7 @@ Raman spectroscopy is the primary non-destructive probe of structural quality, d
 | 2D   | ~2690 cm⁻¹ | Two-phonon second order of D; **no defect needed** | Yes — 106 cm⁻¹/eV |
 | D+G  | ~2940 cm⁻¹ | Combination of D and G phonons; defect-assisted | Yes |
 
-> **Dispersion:** D and 2D bands shift with laser excitation energy at ~53 cm⁻¹/eV and ~106 cm⁻¹/eV respectively — 2D is exactly double, because it is a two-phonon process where both phonons scatter. Peak fitting windows in this analyser shift automatically with `--laser` input.
-
+> **Dispersion:** The 2D band dispersion is approximately twice the D band dispersion, but this relation is not exact. Reported 2D dispersions range from ~85–106 cm⁻¹/eV (e.g., 99 cm⁻¹/eV for turbostratic graphite and 87 cm⁻¹/eV for HOPG [Barros 2005]; ~100 cm⁻¹/eV for graphene [Ferrari & Basko 2013]), while D band dispersions span ~37–53 cm⁻¹/eV (e.g., 37.4 cm⁻¹/eV for B-doped graphene [Kim 2012]; ~53 cm⁻¹/eV [Dresselhaus 2005]; ~50 cm⁻¹/eV [Wu 2018]). Both values vary with material, doping, and stacking order. This tool uses the approximate 2:1 ratio only to predict laser-dependent peak fitting windows — sufficient for that purpose, not for precise dispersion measurements. Peak fitting windows shift automatically with `--laser` input.
 > **G-band and doping:** The G band is non-dispersive in position but shifts with carrier density. Both electron and hole doping stiffen the C–C bond via removal of the Kohn anomaly, upshifting the G band. The direction and magnitude of the shift distinguish n-type from p-type doping [Pisana 2007].
 
 ---
