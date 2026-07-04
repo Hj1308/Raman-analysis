@@ -22,7 +22,8 @@ Raman spectroscopy is the primary non-destructive probe of structural quality, d
 | 2D   | ~2690 cm⁻¹ | Two-phonon second order of D; **no defect needed** | Yes — 106 cm⁻¹/eV |
 | D+G  | ~2940 cm⁻¹ | Combination of D and G phonons; defect-assisted | Yes |
 
-> **Dispersion:** The 2D band dispersion is approximately twice the D band dispersion, but this relation is not exact. Reported 2D dispersions range from ~85–106 cm⁻¹/eV (e.g., 99 cm⁻¹/eV for turbostratic graphite and 87 cm⁻¹/eV for HOPG [Barros 2005]; ~100 cm⁻¹/eV for graphene [Ferrari & Basko 2013]), while D band dispersions span ~37–53 cm⁻¹/eV (e.g., 37.4 cm⁻¹/eV for B-doped graphene [Kim 2012]; ~53 cm⁻¹/eV [Dresselhaus 2005]; ~50 cm⁻¹/eV [Wu 2018]). Both values vary with material, doping, and stacking order. This tool uses the approximate 2:1 ratio only to predict laser-dependent peak fitting windows — sufficient for that purpose, not for precise dispersion measurements. Peak fitting windows shift automatically with `--laser` input.
+ > **Dispersion:** The 2D band dispersion is approximately twice the D band dispersion, but this relation is not exact. Reported 2D dispersions range from ~85–106 cm⁻¹/eV (e.g., 99 cm⁻¹/eV for turbostratic graphite and 87 cm⁻¹/eV for HOPG [Barros 2005]; ~100 cm⁻¹/eV for graphene [Ferrari & Basko 2013]), while D band dispersions span ~37–53 cm⁻¹/eV (e.g., 37.4 cm⁻¹/eV for B-doped graphene [Kim 2012]; ~53 cm⁻¹/eV [Dresselhaus 2005]; ~50 cm⁻¹/eV [Wu 2018]). Both values vary with material, doping, and stacking order. This tool uses the approximate 2:1 ratio only to predict laser-dependent peak fitting windows — sufficient for that purpose, not for precise dispersion measurements. Peak fitting windows shift automatically with `--laser` input.
+
 > **G-band and doping:** The G band is non-dispersive in position but shifts with carrier density. Both electron and hole doping stiffen the C–C bond via removal of the Kohn anomaly, upshifting the G band. The direction and magnitude of the shift distinguish n-type from p-type doping [Pisana 2007].
 
 ---
@@ -84,6 +85,27 @@ Covalent aryl functionalization of graphene is substrate-dependent [Dierke 2022]
 - The substrate effect allows spatial patterning of functionalization density by patterning the underlying substrate.
 
 ---
+## How This Tool Compares
+
+| Capability | This tool | RamanSPy | rampy | Fityk | OriginPro |
+|---|---|---|---|---|---|
+| Global D/G/D′ fit with automatic deconvolution | ✅ | ❌ | ❌ | manual | manual |
+| Laser-energy-dependent fit windows | ✅ | ❌ | ❌ | ❌ | ❌ |
+| L_D and n_D via Cançado with E_L⁴ correction + uncertainty | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Range-based Eckmann defect-type classification with citations | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Stage 1/2 disorder regime detection | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Adaptive lineshape (pseudo-Voigt for disordered materials) | ✅ | partial | ❌ | manual | manual |
+| Literature knowledge base (113 cited reference values) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Fit-quality validation flags | ✅ | ❌ | ❌ | ❌ | ❌ |
+| B/N doping fingerprint | ✅ | ❌ | ❌ | ❌ | ❌ |
+| g-C₃N₄ dedicated support | ✅ | ❌ | ❌ | ❌ | ❌ |
+| General preprocessing / ML / hyperspectral | ❌ (delegates to RamanSPy) | ✅ | partial | ❌ | ✅ |
+| Raman mapping/imaging | ❌ | ✅ | ❌ | ❌ | ✅ |
+| Open source | ✅ | ✅ | ✅ | ✅ | ❌ |
+
+This tool sits on top of the open-source spectroscopy ecosystem: it uses `pybaselines` for baseline subtraction and optionally leverages RamanSPy's despiking and data loaders when available.
+Its unique value is a literature-anchored interpretation layer purpose-built for sp² carbons (graphene, GO, rGO, g-C₃N₄), translating raw peak fits into physically meaningful parameters with uncertainty.
+Users who need general preprocessing, machine learning, or hyperspectral imaging should use RamanSPy as the primary workflow and then feed pre-processed spectra into this tool for domain-specific analysis (see `docs/INTEROPERABILITY.md`).
 
 ## Features
 
