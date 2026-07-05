@@ -1,0 +1,13 @@
+# Auto-detect text files and normalize to LF in repo
+* text=auto
+
+# Keep Windows line endings for batch scripts
+*.bat text eol=crlf
+
+# Treat binary files explicitly
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.pkl binary
+*.npy binary
