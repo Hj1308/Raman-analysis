@@ -282,6 +282,7 @@ class RamanAnalysis:
     defect_type_range_note: str = ""
     estimated_layers:    str   = "N/A"
     twoD_fwhm_warning:   bool  = False
+    fwhm2d_assessment:   str   = ""
     G_found:             bool  = False
     D_found:             bool  = False
     twoD_found:          bool  = False
@@ -297,6 +298,105 @@ def _monolayer_threshold(laser_nm: float) -> float:
         return 1.5
     else:
         return 0.8
+
+
+# ── FWHM(2D) three-tier layer assessment (Fix #4) ─────────
+def assess_layer_number(wn, intensity, center_2d, fwhm_2d):
+    """
+    Three-tier layer assessment from FWHM(2D) + a single-Lorentzian
+    symmetry test, replacing the old hard 35 cm⁻¹ cutoff.
+
+    Tiers [Eckmann 2013; Neumann 2015; Hwang 2010]:
+      * FWHM < 30           -> consistent with monolayer
+      * 30 <= FWHM <= 45    -> symmetry test: single-Lorentzian fit on
+                               center ± 1.5·FWHM; R² > 0.995 = symmetric
+                               (monolayer likely; turbostratic not excluded),
+                               else asymmetric (possibly few-layer)
+      * FWHM > 45           -> multilayer / turbostratic likely
+
+    Returns (verdict: str, confidence: 'high'|'medium'|'low', details: str).
+    """
+    from scipy.optimize import curve_fit as _cf
+
+    if fwhm_2d is None or np.isnan(fwhm_2d) or fwhm_2d <= 0:
+        return "indeterminate", "low", "Invalid FWHM value"
+    if fwhm_2d < 30:
+        return ("consistent with monolayer", "high",
+                "FWHM < 30 cm\u207b\u00b9, consistent with monolayer "
+                "(Eckmann 2013, Neumann 2015)")
+    if fwhm_2d > 45:
+        return ("multilayer or turbostratic likely", "high",
+                "FWHM > 45 cm\u207b\u00b9, likely multilayer or turbostratic")
+
+    half_window = 1.5 * fwhm_2d
+    mask = (wn >= center_2d - half_window) & (wn <= center_2d + half_window)
+    wn_w, int_w = wn[mask], intensity[mask]
+    if len(wn_w) < 10:
+        return ("indeterminate", "low",
+                "Insufficient data points in 2D window (<10)")
+
+    def _lorentzian(x, y0, A, x0, gamma):
+        return y0 + A / (1 + ((x - x0) / gamma) ** 2)
+
+    def _lorentzian2(x, y0, A1, x1, g1, A2, x2, g2):
+        return (y0 + A1 / (1 + ((x - x1) / g1) ** 2)
+                   + A2 / (1 + ((x - x2) / g2) ** 2))
+
+    y0_g = float(np.min(int_w))
+    A_g  = float(np.max(int_w)) - y0_g
+    p0 = [y0_g, A_g, center_2d, fwhm_2d / 2.0]
+    bounds = ([-np.inf, 0, center_2d - fwhm_2d, 1e-6],
+              [np.inf, np.inf, center_2d + fwhm_2d, np.inf])
+    try:
+        popt, _ = _cf(_lorentzian, wn_w, int_w, p0=p0,
+                      bounds=bounds, maxfev=5000)
+        fitted = _lorentzian(wn_w, *popt)
+        ss1 = float(np.sum((int_w - fitted) ** 2))
+        ss_tot = float(np.sum((int_w - np.mean(int_w)) ** 2))
+        r2 = 1.0 if ss_tot == 0 else 1.0 - ss1 / ss_tot
+    except Exception as e:  # fit failure -> honest indeterminate
+        return ("indeterminate", "low", "Symmetry fit failed: {}".format(e))
+
+    if r2 > 0.995:
+        return ("monolayer likely (symmetric 2D)", "high",
+                "FWHM in 30\u201345 cm\u207b\u00b9, symmetry test "
+                "R\u00b2={:.4f} > 0.995; single-Lorentzian 2D consistent "
+                "with monolayer (turbostratic stacking cannot be fully "
+                "excluded)".format(r2))
+
+    # A fixed R² threshold conflates NOISE with ASYMMETRY: a noisy but
+    # genuinely symmetric monolayer 2D also fails R² > 0.995. Disambiguate
+    # by model comparison — if a 2nd Lorentzian component substantially
+    # improves the fit (>40% residual reduction), the misfit is genuine
+    # asymmetry (AB few-layer signature, Ferrari 2006); if not, it is noise.
+    try:
+        sep = 0.4 * fwhm_2d
+        p2, _ = _cf(
+            _lorentzian2, wn_w, int_w,
+            p0=[y0_g, 0.6 * A_g, center_2d - sep / 2, fwhm_2d / 2.5,
+                       0.6 * A_g, center_2d + sep / 2, fwhm_2d / 2.5],
+            bounds=([-np.inf, 0, center_2d - 2 * fwhm_2d, 1e-6,
+                              0, center_2d - 2 * fwhm_2d, 1e-6],
+                    [np.inf, np.inf, center_2d + 2 * fwhm_2d, np.inf,
+                             np.inf, center_2d + 2 * fwhm_2d, np.inf]),
+            maxfev=8000)
+        ss2 = float(np.sum((int_w - _lorentzian2(wn_w, *p2)) ** 2))
+        improvement = 1.0 - ss2 / ss1 if ss1 > 0 else 0.0
+    except Exception:
+        improvement = 0.0  # 2-Lor did not converge -> no asymmetry evidence
+
+    if improvement > 0.40:
+        return ("asymmetric 2D, possibly few-layer", "medium",
+                "FWHM in 30\u201345 cm\u207b\u00b9; single-Lorentzian "
+                "R\u00b2={:.4f}; a 2nd Lorentzian cuts residuals by {:.0f}% "
+                "\u2192 genuine asymmetry (AB few-layer signature, "
+                "Ferrari 2006)".format(r2, 100 * improvement))
+    return ("monolayer likely (symmetric within noise)", "medium",
+            "FWHM in 30\u201345 cm\u207b\u00b9; single-Lorentzian "
+            "R\u00b2={:.4f} (below 0.995) but a 2nd Lorentzian improves "
+            "residuals by only {:.0f}% \u2192 misfit is noise, not "
+            "asymmetry; check strain/doping (Hwang 2010)".format(
+                r2, 100 * improvement))
 
 
 # ── B-doping fingerprint (v2.4, Feature #2) ───────────────
@@ -533,6 +633,8 @@ def analyze(
     laser_nm:     float = 532.0,
     substrate:    str   = "unknown",
     multi_wavelength_D: Optional[List[Tuple[float, float]]] = None,
+    wn:           Optional[np.ndarray] = None,
+    intensity:    Optional[np.ndarray] = None,
 ) -> RamanAnalysis:
     """
     Compute all quantitative Raman metrics from fitted peaks.
@@ -729,13 +831,33 @@ def analyze(
         thr  = _monolayer_threshold(laser_nm)
         fwhm_2d = twoD.fwhm
 
-        fwhm_ok  = (not np.isnan(fwhm_2d)) and (fwhm_2d <= 35.0)
+        # Fix #4: three-tier FWHM(2D) logic with symmetry test replaces the
+        # old hard 35 cm⁻¹ cutoff. Symmetry test needs the raw spectrum;
+        # when it isn't supplied, fall back to FWHM-only tiers.
+        if wn is not None and intensity is not None:
+            verdict, conf, details = assess_layer_number(
+                np.asarray(wn), np.asarray(intensity), twoD.center, fwhm_2d)
+        else:
+            verdict, conf, details = assess_layer_number(
+                np.array([]), np.array([]), twoD.center, fwhm_2d)
+            if verdict == "indeterminate" and "Insufficient" in details:
+                # 30–45 band without raw data: honest middle verdict
+                verdict = "monolayer possible; check strain/doping"
+                conf = "medium"
+                details = ("FWHM in 30\u201345 cm\u207b\u00b9; symmetry test "
+                           "skipped (raw spectrum not supplied)")
+        result.fwhm2d_assessment = "{} [{} confidence] \u2014 {}".format(
+            verdict, conf, details)
+
+        fwhm_ok = verdict in ("consistent with monolayer",
+                              "monolayer likely (symmetric 2D)",
+                              "monolayer possible; check strain/doping")
         fwhm_tag = ""
         if not fwhm_ok and not np.isnan(fwhm_2d):
             result.twoD_fwhm_warning = True
             fwhm_tag = (
-                " [WARNING: FWHM(2D)={:.1f} cm\u207b\u00b9 > 35 \u2014 "
-                "I2D/IG layer count unreliable]".format(fwhm_2d)
+                " [WARNING: FWHM(2D)={:.1f} cm\u207b\u00b9 \u2014 {}; "
+                "I2D/IG layer count may be unreliable]".format(fwhm_2d, verdict)
             )
 
         if r > thr:
